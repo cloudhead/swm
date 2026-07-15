@@ -1,0 +1,114 @@
+= swm(1)
+:doctype: manpage
+:manmanual: SWM Manual
+:mansource: swm 1.0.0
+
+== NAME
+
+swm - simple window manager for Wayland
+
+== SYNOPSIS
+
+*swm* [*-v*] [*-d*] [*-s* _command_]
+
+== DESCRIPTION
+
+*swm* is a simple Wayland window manager based on wlroots and forked from
+*dwl*.
+
+*swm* manages 10 global workspaces. A workspace is shown on at most one output;
+switching to a workspace that is visible on another output swaps the workspaces
+of the two outputs. Five layouts are available per workspace: master-left,
+master-top, master-right, master-bottom, and max.
+
+*swm* has no built-in bar and no runtime configuration file. Bars speaking
+ext-workspace-v1 and wlr-layer-shell, such as *waybar*(5), work out of the box.
+Users are encouraged to customize *swm* by editing the sources, in particular
+_config.h_.
+
+== OPTIONS
+
+*-v*::
+Write the name and version to standard error and exit unsuccessfully.
+
+*-d*::
+Enable full wlroots logging, including debug information.
+
+*-s* _command_::
+Start a shell process running _command_. On exit, send `SIGTERM` to the child
+process group and wait for it to stop.
+
+== KEY BINDINGS
+
+The default key bindings (Mod = Alt) are as follows:
+
+=== Workspaces
+
+[cols="1,3", options="header"]
+|===
+|Binding |Action
+
+|*Mod-[1-9,0]* |Switch to workspace 1-10.
+|*Mod-Shift-[1-9,0]* |Send window to workspace 1-10.
+|*Mod-a, Mod-Tab* |Switch to the previously shown workspace.
+|*Mod-Right/Left* |Switch to the next/previous non-empty workspace.
+|*Mod-Up/Down* |Switch to the next/previous workspace, including empty ones.
+|*Mod-Shift-Up/Down* |As above, carrying the focused window along.
+|===
+
+=== Windows
+
+[cols="1,3", options="header"]
+|===
+|Binding |Action
+
+|*Mod-j/k* |Focus next/previous window.
+|*Mod-Shift-j/k* |Swap window with the next/previous window.
+|*Mod-Return* |Swap the focused window with the main window.
+|*Mod-m* |Focus the main window; again to return.
+|*Mod-u* |Focus the most recently urgent window.
+|*Mod-r* |Raise the focused window.
+|*Mod-t* |Toggle floating.
+|*Mod-Shift-f* |Toggle fullscreen.
+|*Mod-Shift-c* |Close the focused window.
+|*Mod-Shift-Left/Right* |Focus the previous/next output.
+|*Mod-Ctrl-Left/Right* |Send the focused window to the previous/next output.
+|===
+
+=== Layout
+
+[cols="1,3", options="header"]
+|===
+|Binding |Action
+
+|*Mod-Space* |Cycle layouts.
+|*Mod-Shift-Space* |Reset the current layout.
+|*Mod-h/l* |Shrink/grow the master area.
+|*Mod-comma/period* |Add/remove windows to/from the master area.
+|*Mod-Shift-less/greater* |Add/remove stack columns.
+|*Mod-Shift-bar* |Flip master and stack areas.
+|*Mod-f* |Toggle the max layout.
+|===
+
+=== Programs and system
+
+[cols="1,3", options="header"]
+|===
+|Binding |Action
+
+|*Mod-x* |Lock the screen with *swaylock*(1).
+|*Mod-p* |Spawn *wmenu-run*(1).
+|*Mod-Shift-Return* |Spawn *foot*(1).
+|*Mod-Shift-q* |Quit *swm*.
+|===
+
+Window focus follows the mouse. Windows can be moved with Mod-left-click and
+resized with Mod-right-click. Mod-middle-click toggles floating.
+
+== SEE ALSO
+
+*foot*(1), *wmenu*(1)
+
+== AUTHORS
+
+*swm* is a fork of *dwl*; see the LICENSE files for its authors.

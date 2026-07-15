@@ -1,0 +1,143 @@
+
+
+
+     ███████╗██╗    ██╗███╗   ███╗
+     ██╔════╝██║    ██║████╗ ████║
+     ███████╗██║ █╗ ██║██╔████╔██║
+     ╚════██║██║███╗██║██║╚██╔╝██║
+     ███████║╚███╔███╔╝██║ ╚═╝ ██║
+     ╚══════╝ ╚══╝╚══╝ ╚═╝     ╚═╝
+          simple window manager
+
+
+swm is a dynamic tiling Wayland compositor based on wlroots. It began as a
+fork of dwl[0], replacing dwl's dwm-style window-management policy with one
+inspired by spectrwm[1].
+
+swm is configured in C and aims to remain small enough to understand, modify,
+and extend. It supports native Wayland clients, X11 clients through Xwayland,
+multiple outputs, global workspaces, server-side decorations, layer-shell
+panels and launchers, session locking, idle inhibition, input methods, and
+the standard wlroots output-management, screencopy, data-control, and
+foreign-toplevel protocols.
+
+
+# REQUIREMENTS
+
+Building swm requires:
+
+* C compiler that supports C23, and lld
+* GNU or BSD make
+* pkg-config
+* asciidoctor (man page)
+* wlroots 0.20
+* wayland and wayland-protocols
+* libinput and xkbcommon
+* libxcb and xcb-icccm
+
+Xwayland is optional at runtime. Without it, swm continues to run but cannot
+manage X11 applications. The default configuration also expects `foot` and
+`wmenu-run`; change these commands in `config.h` if they are not installed.
+
+
+# BUILD AND CONFIGURATION
+
+    make
+
+On the first build, `config.def.h` is copied to `config.h`. Subsequent builds,
+including forced builds, preserve `config.h`. Edit that file to configure
+appearance, input, monitor rules, application rules, layouts, commands,
+autostart programs, and bindings, then rebuild swm.
+
+There is no runtime configuration file. To return to the distributed defaults,
+remove `config.h` and rebuild; save any local configuration first.
+
+The compiler, installation prefix, version, and wlroots include/library flags
+can be overridden in `config.mk` or on the make command line. In particular,
+`WLR_INCS` and `WLR_LIBS` can point at a separately built wlroots tree.
+
+
+# INSTALL
+
+The default prefix is `/usr/local`:
+
+    sudo make install
+
+This installs the executable, `swm(1)` manual page, and Wayland session entry.
+Use `PREFIX` and `DESTDIR` to change or stage the installation, for example:
+
+    make PREFIX=/usr DESTDIR="$pkgdir" install
+
+To remove the same installed files:
+
+    sudo make uninstall
+
+
+# RUN
+
+Start `swm` from a TTY, select it in a display manager, or run it nested inside
+another Wayland session. `XDG_RUNTIME_DIR` must be set.
+
+    swm [-s command]
+
+The `-s` flag starts a command through `/bin/sh`; when swm exits it terminates
+that command's process group. Programs listed in the `autostart` array in
+`config.h` are started independently. Set `SWM_NO_AUTOSTART=1` to suppress that
+array, which is useful for testing or a minimal session.
+
+swm sets `WAYLAND_DISPLAY`, `DISPLAY` when Xwayland is available, and
+`XDG_CURRENT_DESKTOP=swm` for programs it starts.
+
+
+# USAGE
+
+The defaults use Alt as Mod and provide ten global workspaces. A workspace can
+appear on only one output; selecting one already visible elsewhere swaps the
+two outputs' workspaces. Each workspace keeps its own layout state. Available
+layouts place the master area on the left, top, right, or bottom, plus a max
+layout. Floating and fullscreen are independent of the selected layout.
+
+See `man swm` for the full set of key bindings.
+
+
+# BARS AND STATUS
+
+swm has no built-in bar. A layer-shell bar such as Waybar[2] can use the
+`ext/workspaces` module, backed by swm's ext-workspace-v1 implementation.
+Empty inactive workspaces are advertised as hidden; occupied and selected
+workspaces remain visible.
+
+On each state change swm also writes line-oriented status records to standard
+output. When `-s` is used, that output is connected to the startup command's
+standard input. The active window title is published atomically to
+`$XDG_RUNTIME_DIR/swm-title`, which can be consumed by a custom bar module.
+
+
+# TESTING AND DEVELOPMENT
+
+Run the complete test suite with:
+
+    make test
+
+It builds unit tests and protocol clients, runs a headless nested-compositor
+integration suite (including a two-output run), collects LLVM source coverage,
+and requires at least 80% aggregate production-code line coverage. The test
+target therefore also requires LLVM's coverage tools, a POSIX shell, and the
+runtime libraries needed by the normal build.
+
+Other development targets are:
+
+    make man       # build swm.1 from swm.1.adoc
+    make fmt       # format tracked C sources with clang-format
+    make analyze   # rebuild under scan-build
+    make clean
+
+
+# LICENSE
+
+swm inherits code and design from dwl, dwm, spectrwm, sway, and TinyWL. See
+`LICENSE` and the `LICENSE.*` files for the applicable terms and attribution.
+
+[0]: https://codeberg.org/dwl/dwl
+[1]: https://github.com/conformal/spectrwm
+[2]: https://github.com/Alexays/Waybar

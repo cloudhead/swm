@@ -1,0 +1,8 @@
+swm
+swm.1
+config.h
+*.zst
+*.o
+*-protocol.c
+*-protocol.h
+*.coverage

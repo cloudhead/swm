@@ -1,0 +1,19 @@
+IndentWidth: 4
+ColumnLimit: 100
+UseTab: Never
+AllowShortBlocksOnASingleLine: Always  # or use 'Empty' for only empty blocks
+AllowShortFunctionsOnASingleLine: Empty
+AlignConsecutiveMacros: AcrossComments
+AlignAfterOpenBracket: BlockIndent
+AlignConsecutiveBitFields: AcrossEmptyLinesAndComments
+AlignConsecutiveDeclarations:
+  Enabled: true
+AlignConsecutiveAssignments:
+  Enabled: true
+  AlignCompound: true
+  PadOperators: true
+BinPackParameters: false
+BinPackArguments: false
+BreakAfterReturnType: Automatic
+PenaltyReturnTypeOnItsOwnLine: 999
+Cpp11BracedListStyle: false
