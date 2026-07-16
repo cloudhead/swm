@@ -31,6 +31,8 @@
 #include <wlr/types/wlr_export_dmabuf_v1.h>
 #include <wlr/types/wlr_ext_data_control_v1.h>
 #include <wlr/types/wlr_ext_foreign_toplevel_list_v1.h>
+#include <wlr/types/wlr_ext_image_capture_source_v1.h>
+#include <wlr/types/wlr_ext_image_copy_capture_v1.h>
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
@@ -461,6 +463,7 @@ static client_t         *focus_close(client_t *c);
 static void              focus_main(const arg_t *arg);
 static void              focus_urgent(const arg_t *arg);
 static void              ftl_activate_notify(struct wl_listener *listener, void *data);
+static void              ftl_capture_request_notify(struct wl_listener *listener, void *data);
 static void              ftl_close_notify(struct wl_listener *listener, void *data);
 static void              ftl_fullscreen_notify(struct wl_listener *listener, void *data);
 static void              ftl_sync(client_t *c);
@@ -527,6 +530,7 @@ static void pointer_focus(
     client_t *c, struct wlr_surface *surface, double sx, double sy, uint32_t time, bool refocus
 );
 static void         print_status(void);
+static void         publish_windows(const char *runtime);
 static void         prepare_child(void);
 static void         power_manager_set_mode(struct wl_listener *listener, void *data);
 static void         quit(const arg_t *arg);
@@ -639,7 +643,9 @@ static struct wl_listener im_commit    = { .notify = input_method_commit_notify 
 static struct wl_listener im_destroy   = { .notify = input_method_destroy_notify };
 static struct wl_listener im_grab_kb   = { .notify = input_method_grab_keyboard };
 static struct wl_listener im_new_popup = { .notify = input_method_new_popup };
-static struct wlr_ext_foreign_toplevel_list_v1 *ext_ftl_list;
+static struct wlr_ext_foreign_toplevel_list_v1                         *ext_ftl_list;
+static struct wlr_ext_foreign_toplevel_image_capture_source_manager_v1 *ext_ftl_capture_mgr;
+static struct wl_listener ext_ftl_capture_request = { .notify = ftl_capture_request_notify };
 
 static struct wlr_pointer_constraints_v1      *pointer_constraints;
 static struct wlr_relative_pointer_manager_v1 *relative_pointer_mgr;
@@ -1982,6 +1988,7 @@ void cleanup_listeners(void) {
     wl_list_remove(&new_xdg_decoration.link);
     wl_list_remove(&new_xdg_popup.link);
     wl_list_remove(&new_layer_surface.link);
+    wl_list_remove(&ext_ftl_capture_request.link);
     wl_list_remove(&output_mgr_apply.link);
     wl_list_remove(&output_mgr_test.link);
     wl_list_remove(&output_power_mgr_set_mode.link);
@@ -2990,6 +2997,22 @@ void ftl_activate_notify(struct wl_listener *listener, void *data) {
     focus_client(c, 1);
 }
 
+/* Create a scene-backed capture source for a published window. */
+void ftl_capture_request_notify(struct wl_listener *listener, void *data) {
+    struct wlr_ext_foreign_toplevel_image_capture_source_manager_v1_request *request = data;
+    struct wlr_ext_image_capture_source_v1                                  *source;
+    client_t *c = request->toplevel_handle->data;
+
+    if (!c || !c->scene || !client_surface(c)->mapped)
+        return;
+    source = wlr_ext_image_capture_source_v1_create_with_scene_node(
+        &c->scene->node, event_loop, alloc, drw
+    );
+
+    if (source)
+        wlr_ext_foreign_toplevel_image_capture_source_manager_v1_request_accept(request, source);
+}
+
 /* Forward a taskbar's close request to the selected window. */
 void ftl_close_notify(struct wl_listener *listener, void *data) {
     client_t *c = wl_container_of(listener, c, ftl_close);
@@ -3841,6 +3864,8 @@ void map_notify(struct wl_listener *listener, void *data) {
             .title  = client_get_title(c),
         }
     );
+    if (c->extftl)
+        c->extftl->data = c;
     ftl_sync(c);
     /* A managed window can receive keyboard focus only after it is visible. */
     if (c->ws && c->ws->mon)
@@ -4199,6 +4224,34 @@ static void status_field(char *dst, size_t size, const char *src) {
     swm_sanitize_field(dst, size, src, nullptr);
 }
 
+/* Publish visible window rectangles in slurp's predefined-region format. */
+void publish_windows(const char *runtime) {
+    client_t *c;
+    FILE     *file;
+    char      path[MAX_STATE_PATH], tmppath[MAX_STATE_PATH], title[MAX_WINDOW_STATE_FIELD];
+    int       ok = 1;
+
+    if (!runtime || snprintf(path, sizeof(path), "%s/swm-windows", runtime) >= (int)sizeof(path) ||
+        snprintf(tmppath, sizeof(tmppath), "%s.tmp.%ld", path, (long)getpid()) >=
+            (int)sizeof(tmppath) ||
+        !(file = fopen(tmppath, "w")))
+        return;
+
+    wl_list_for_each(c, &clients, link) {
+        if (!c->mon || !client_surface(c)->mapped || !c->scene->node.enabled)
+            continue;
+        status_field(title, sizeof(title), client_get_title(c));
+        if (fprintf(
+                file, "%d,%d %dx%d %s\n", c->geom.x, c->geom.y, c->geom.width, c->geom.height, title
+            ) < 0)
+            ok = 0;
+    }
+    if (fflush(file) < 0 || fclose(file) < 0)
+        ok = 0;
+    if (!ok || rename(tmppath, path) < 0)
+        unlink(tmppath);
+}
+
 /* Publish current display, workspace, and focus state on standard output. */
 void print_status(void) {
     monitor_t  *m = nullptr;
@@ -4245,6 +4298,7 @@ void print_status(void) {
         );
     }
     runtime = getenv("XDG_RUNTIME_DIR");
+    publish_windows(runtime);
 
     if (runtime && selmon) {
         src = (c = focus_top(selmon)) ? client_get_title(c) : "";
@@ -5189,6 +5243,9 @@ void setup(void) {
     /* Publish window lists for taskbars and switchers. */
     ftl_mgr      = wlr_foreign_toplevel_manager_v1_create(dpy);
     ext_ftl_list = wlr_ext_foreign_toplevel_list_v1_create(dpy, 1);
+    wlr_ext_image_copy_capture_manager_v1_create(dpy, 1);
+    ext_ftl_capture_mgr = wlr_ext_foreign_toplevel_image_capture_source_manager_v1_create(dpy, 1);
+    wl_signal_add(&ext_ftl_capture_mgr->events.new_request, &ext_ftl_capture_request);
 
     /* Let virtual machines and remote desktops capture window-manager shortcuts. */
     kb_inhibit_mgr = wlr_keyboard_shortcuts_inhibit_v1_create(dpy);

@@ -18,8 +18,8 @@ swm is configured in C and aims to remain small enough to understand, modify,
 and extend. It supports native Wayland clients, X11 clients through Xwayland,
 multiple outputs, global workspaces, server-side decorations, layer-shell
 panels and launchers, session locking, idle inhibition, input methods, and
-the standard wlroots output-management, screencopy, data-control, and
-foreign-toplevel protocols.
+the standard wlroots output-management, screencopy, data-control,
+foreign-toplevel, and toplevel image-capture protocols.
 
 
 # REQUIREMENTS
@@ -111,6 +111,8 @@ On each state change swm also writes line-oriented status records to standard
 output. When `-s` is used, that output is connected to the startup command's
 standard input. The active window title is published atomically to
 `$XDG_RUNTIME_DIR/swm-title`, which can be consumed by a custom bar module.
+Visible window rectangles are published atomically to
+`$XDG_RUNTIME_DIR/swm-windows` in the format accepted by `slurp -r`.
 
 
 # TESTING AND DEVELOPMENT
