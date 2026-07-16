@@ -1863,9 +1863,11 @@ void button_press(struct wl_listener *listener, void *data) {
                 client_set_resizing(grabc, 0);
             wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
             cursor_mode = CURSOR_NORMAL;
-            /* Move the window to the workspace on its new display. */
+            /* Move the window to the workspace on its new display. The
+             * cursor can sit outside every output (on a layout edge or in a
+             * gap); keep the window on its current display in that case. */
             selmon = point_to_monitor(cursor->x, cursor->y);
-            set_monitor(grabc, selmon, 0);
+            set_monitor(grabc, selmon ? selmon : grabc->mon, 0);
             remember_client(grabc);
             grabc = nullptr;
             return;
@@ -2132,7 +2134,7 @@ void commit_notify(struct wl_listener *listener, void *data) {
             (struct swm_box *)&c->geom, geom.width, geom.height, c->bw, c->resize_edges
         );
     }
-    if (c->resize) {
+    if (c->resize && c->mon) {
         uint32_t resize_serial = c->resize;
         int      latest        = resize_serial <= c->surface.xdg->current.configure_serial;
 
@@ -2143,6 +2145,9 @@ void commit_notify(struct wl_listener *listener, void *data) {
             c->resize = 0;
         else
             c->geom = c->pending_geom;
+    } else if (c->resize) {
+        /* The client lost its display with a resize in flight; settle the
+         * resize once a display is available again. */
     } else {
         resize(c, c->geom, c->is_floating && !c->is_fullscreen);
     }
@@ -2769,6 +2774,9 @@ void destroy_keyboard_group(struct wl_listener *listener, void *data) {
 monitor_t *direction_to_monitor(enum wlr_direction dir) {
     struct wlr_output *next;
 
+    if (!selmon)
+        return nullptr;
+
     if (!wlr_output_layout_get(output_layout, selmon->wlr_output))
         return selmon;
 
@@ -2900,7 +2908,7 @@ client_t *focus_close(client_t *c) {
 void focus_monitor(const arg_t *arg) {
     int i = 0, nmons = wl_list_length(&mons);
 
-    if (nmons) {
+    if (selmon && nmons) {
         do /* Skip disabled displays. */
             selmon = direction_to_monitor(arg->i);
         while (!selmon->wlr_output->enabled && i++ < nmons);
@@ -6013,7 +6021,7 @@ void configure_x11(struct wl_listener *listener, void *data) {
         );
         return;
     }
-    if ((c->is_floating && c != grabc) || !c->mon->ws || !c->mon->ws->lt->arrange) {
+    if ((c->is_floating && c != grabc) || !c->mon || !c->mon->ws || !c->mon->ws->lt->arrange) {
         resize(
             c,
             (struct wlr_box){ .x      = event->x - c->bw,

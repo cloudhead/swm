@@ -32,6 +32,9 @@ size_t env_expand(char *output, size_t capacity, const char *input) {
     size_t      i = 0, len, out = 0, start;
     char        name[MAX_ENV_SIZE];
 
+    if (!capacity)
+        return 0;
+
     while (input[i]) {
         if (input[i] != '$') {
             if (out + 1 >= capacity)
