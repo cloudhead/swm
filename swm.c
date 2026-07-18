@@ -52,6 +52,7 @@
 #include <wlr/types/wlr_output_power_management_v1.h>
 #include <wlr/types/wlr_pointer.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
+#include <wlr/types/wlr_pointer_gestures_v1.h>
 #include <wlr/types/wlr_presentation_time.h>
 #include <wlr/types/wlr_primary_selection.h>
 #include <wlr/types/wlr_primary_selection_v1.h>
@@ -529,6 +530,14 @@ static void      motion_notify(
     bool                     refocus
 );
 static void motion_relative(struct wl_listener *listener, void *data);
+static void gesture_swipe_begin(struct wl_listener *listener, void *data);
+static void gesture_swipe_update(struct wl_listener *listener, void *data);
+static void gesture_swipe_end(struct wl_listener *listener, void *data);
+static void gesture_pinch_begin(struct wl_listener *listener, void *data);
+static void gesture_pinch_update(struct wl_listener *listener, void *data);
+static void gesture_pinch_end(struct wl_listener *listener, void *data);
+static void gesture_hold_begin(struct wl_listener *listener, void *data);
+static void gesture_hold_end(struct wl_listener *listener, void *data);
 static void move_resize(const arg_t *arg);
 static void output_manager_apply(struct wl_listener *listener, void *data);
 static void output_manager_apply_or_test(struct wlr_output_configuration_v1 *config, bool test);
@@ -662,6 +671,7 @@ static struct wlr_ext_foreign_toplevel_image_capture_source_manager_v1 *ext_ftl_
 static struct wl_listener ext_ftl_capture_request = { .notify = ftl_capture_request_notify };
 
 static struct wlr_pointer_constraints_v1      *pointer_constraints;
+static struct wlr_pointer_gestures_v1         *pointer_gestures;
 static struct wlr_relative_pointer_manager_v1 *relative_pointer_mgr;
 static struct wlr_pointer_constraint_v1       *active_constraint;
 
@@ -699,6 +709,14 @@ static struct wl_listener cursor_button          = { .notify = button_press };
 static struct wl_listener cursor_frame_listener  = { .notify = cursor_frame };
 static struct wl_listener cursor_motion          = { .notify = motion_relative };
 static struct wl_listener cursor_motion_absolute = { .notify = motion_absolute };
+static struct wl_listener cursor_swipe_begin     = { .notify = gesture_swipe_begin };
+static struct wl_listener cursor_swipe_update    = { .notify = gesture_swipe_update };
+static struct wl_listener cursor_swipe_end       = { .notify = gesture_swipe_end };
+static struct wl_listener cursor_pinch_begin     = { .notify = gesture_pinch_begin };
+static struct wl_listener cursor_pinch_update    = { .notify = gesture_pinch_update };
+static struct wl_listener cursor_pinch_end       = { .notify = gesture_pinch_end };
+static struct wl_listener cursor_hold_begin      = { .notify = gesture_hold_begin };
+static struct wl_listener cursor_hold_end        = { .notify = gesture_hold_end };
 static struct wl_listener gpu_reset_listener     = { .notify = gpu_reset };
 static struct wl_listener layout_change          = { .notify = update_monitors };
 static struct wl_listener new_idle_inhibitor     = { .notify = create_idle_inhibitor };
@@ -1991,6 +2009,14 @@ void cleanup_listeners(void) {
     wl_list_remove(&cursor_frame_listener.link);
     wl_list_remove(&cursor_motion.link);
     wl_list_remove(&cursor_motion_absolute.link);
+    wl_list_remove(&cursor_swipe_begin.link);
+    wl_list_remove(&cursor_swipe_update.link);
+    wl_list_remove(&cursor_swipe_end.link);
+    wl_list_remove(&cursor_pinch_begin.link);
+    wl_list_remove(&cursor_pinch_update.link);
+    wl_list_remove(&cursor_pinch_end.link);
+    wl_list_remove(&cursor_hold_begin.link);
+    wl_list_remove(&cursor_hold_end.link);
     wl_list_remove(&gpu_reset_listener.link);
     wl_list_remove(&new_idle_inhibitor.link);
     wl_list_remove(&layout_change.link);
@@ -4132,6 +4158,87 @@ void motion_relative(struct wl_listener *listener, void *data) {
     );
 }
 
+/* Forward touchpad swipe gestures to clients of the focused surface. */
+void gesture_swipe_begin(struct wl_listener *listener, void *data) {
+    struct wlr_pointer_swipe_begin_event *event = data;
+
+    wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
+    wlr_pointer_gestures_v1_send_swipe_begin(
+        pointer_gestures, seat, event->time_msec, event->fingers
+    );
+}
+
+void gesture_swipe_update(struct wl_listener *listener, void *data) {
+    struct wlr_pointer_swipe_update_event *event = data;
+
+    wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
+    wlr_pointer_gestures_v1_send_swipe_update(
+        pointer_gestures, seat, event->time_msec, event->dx, event->dy
+    );
+}
+
+void gesture_swipe_end(struct wl_listener *listener, void *data) {
+    struct wlr_pointer_swipe_end_event *event = data;
+
+    wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
+    wlr_pointer_gestures_v1_send_swipe_end(
+        pointer_gestures, seat, event->time_msec, event->cancelled
+    );
+}
+
+/* Forward touchpad pinch gestures, including scale and rotation. */
+void gesture_pinch_begin(struct wl_listener *listener, void *data) {
+    struct wlr_pointer_pinch_begin_event *event = data;
+
+    wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
+    wlr_pointer_gestures_v1_send_pinch_begin(
+        pointer_gestures, seat, event->time_msec, event->fingers
+    );
+}
+
+void gesture_pinch_update(struct wl_listener *listener, void *data) {
+    struct wlr_pointer_pinch_update_event *event = data;
+
+    wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
+    wlr_pointer_gestures_v1_send_pinch_update(
+        pointer_gestures,
+        seat,
+        event->time_msec,
+        event->dx,
+        event->dy,
+        event->scale,
+        event->rotation
+    );
+}
+
+void gesture_pinch_end(struct wl_listener *listener, void *data) {
+    struct wlr_pointer_pinch_end_event *event = data;
+
+    wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
+    wlr_pointer_gestures_v1_send_pinch_end(
+        pointer_gestures, seat, event->time_msec, event->cancelled
+    );
+}
+
+/* Forward touchpad hold gestures to clients of the focused surface. */
+void gesture_hold_begin(struct wl_listener *listener, void *data) {
+    struct wlr_pointer_hold_begin_event *event = data;
+
+    wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
+    wlr_pointer_gestures_v1_send_hold_begin(
+        pointer_gestures, seat, event->time_msec, event->fingers
+    );
+}
+
+void gesture_hold_end(struct wl_listener *listener, void *data) {
+    struct wlr_pointer_hold_end_event *event = data;
+
+    wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
+    wlr_pointer_gestures_v1_send_hold_end(
+        pointer_gestures, seat, event->time_msec, event->cancelled
+    );
+}
+
 /* Begin moving or resizing the window under the pointer. */
 void move_resize(const arg_t *arg) {
     if (cursor_mode != CURSOR_NORMAL && cursor_mode != CURSOR_PRESSED)
@@ -5384,6 +5491,7 @@ void setup(void) {
     wl_signal_add(&pointer_constraints->events.new_constraint, &new_pointer_constraint);
 
     relative_pointer_mgr = wlr_relative_pointer_manager_v1_create(dpy);
+    pointer_gestures     = wlr_pointer_gestures_v1_create(dpy);
 
     /* Track the pointer across all displays. */
     cursor = wlr_cursor_create();
@@ -5399,6 +5507,14 @@ void setup(void) {
     wl_signal_add(&cursor->events.button, &cursor_button);
     wl_signal_add(&cursor->events.axis, &cursor_axis);
     wl_signal_add(&cursor->events.frame, &cursor_frame_listener);
+    wl_signal_add(&cursor->events.swipe_begin, &cursor_swipe_begin);
+    wl_signal_add(&cursor->events.swipe_update, &cursor_swipe_update);
+    wl_signal_add(&cursor->events.swipe_end, &cursor_swipe_end);
+    wl_signal_add(&cursor->events.pinch_begin, &cursor_pinch_begin);
+    wl_signal_add(&cursor->events.pinch_update, &cursor_pinch_update);
+    wl_signal_add(&cursor->events.pinch_end, &cursor_pinch_end);
+    wl_signal_add(&cursor->events.hold_begin, &cursor_hold_begin);
+    wl_signal_add(&cursor->events.hold_end, &cursor_hold_end);
 
     cursor_shape_mgr = wlr_cursor_shape_manager_v1_create(dpy, 1);
     wl_signal_add(&cursor_shape_mgr->events.request_set_shape, &request_set_cursor_shape);
