@@ -73,6 +73,7 @@
 #include <wlr/types/wlr_xdg_dialog_v1.h>
 #include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/types/wlr_xdg_system_bell_v1.h>
 #include <wlr/util/log.h>
 #include <wlr/util/region.h>
 #include <wlr/xwayland.h>
@@ -592,6 +593,8 @@ static void       update_monitors(struct wl_listener *listener, void *data);
 static void       update_app_id(struct wl_listener *listener, void *data);
 static void       update_title(struct wl_listener *listener, void *data);
 static void       urgent(struct wl_listener *listener, void *data);
+static void       ring_system_bell(struct wl_listener *listener, void *data);
+static void       mark_urgent(client_t *c);
 static void       create_dialog(struct wl_listener *listener, void *data);
 static void       dialog_changed(struct wl_listener *listener, void *data);
 static void       dialog_destroyed(struct wl_listener *listener, void *data);
@@ -632,6 +635,7 @@ static struct wlr_session    *session;
 
 static struct wlr_xdg_shell                             *xdg_shell;
 static struct wlr_xdg_wm_dialog_v1                      *xdg_dialog_mgr;
+static struct wlr_xdg_system_bell_v1                    *system_bell;
 static struct wlr_xdg_activation_v1                     *activation;
 static struct wlr_xdg_decoration_manager_v1             *xdg_decoration_mgr;
 static struct wl_list                                    clients; /* tiling order */
@@ -715,6 +719,7 @@ static struct wl_listener output_mgr_apply                 = { .notify = output_
 static struct wl_listener output_mgr_test                  = { .notify = output_manager_test };
 static struct wl_listener output_power_mgr_set_mode        = { .notify = power_manager_set_mode };
 static struct wl_listener request_activate                 = { .notify = urgent };
+static struct wl_listener system_bell_ring                 = { .notify = ring_system_bell };
 static struct wl_listener request_cursor                   = { .notify = set_cursor };
 static struct wl_listener request_set_psel                 = { .notify = set_primary_selection };
 static struct wl_listener request_set_sel                  = { .notify = set_selection };
@@ -892,12 +897,12 @@ static inline int toplevel_from_wlr_surface(
 
     if ((xsurface = wlr_xwayland_surface_try_from_wlr_surface(root_surface))) {
         c    = xsurface->data;
-        type = c->type;
+        type = c ? (int)c->type : -1;
         goto end;
     }
     if ((layer_surface = wlr_layer_surface_v1_try_from_wlr_surface(root_surface))) {
         l    = layer_surface->data;
-        type = LAYER_SHELL;
+        type = l ? LAYER_SHELL : -1;
         goto end;
     }
     xdg_surface = wlr_xdg_surface_try_from_wlr_surface(root_surface);
@@ -920,7 +925,7 @@ static inline int toplevel_from_wlr_surface(
             break;
         case WLR_XDG_SURFACE_ROLE_TOPLEVEL:
             c    = xdg_surface->data;
-            type = c->type;
+            type = c ? (int)c->type : -1;
             goto end;
         case WLR_XDG_SURFACE_ROLE_NONE:
             return -1;
@@ -2007,6 +2012,7 @@ void cleanup_listeners(void) {
     wl_list_remove(&output_mgr_test.link);
     wl_list_remove(&output_power_mgr_set_mode.link);
     wl_list_remove(&request_activate.link);
+    wl_list_remove(&system_bell_ring.link);
     wl_list_remove(&request_cursor.link);
     wl_list_remove(&request_set_psel.link);
     wl_list_remove(&request_set_sel.link);
@@ -5293,6 +5299,9 @@ void setup(void) {
     activation = wlr_xdg_activation_v1_create(dpy);
     wl_signal_add(&activation->events.request_activate, &request_activate);
 
+    system_bell = wlr_xdg_system_bell_v1_create(dpy, 1);
+    wl_signal_add(&system_bell->events.ring, &system_bell_ring);
+
     wlr_scene_set_gamma_control_manager_v1(scene, wlr_gamma_control_manager_v1_create(dpy));
 
     power_mgr = wlr_output_power_manager_v1_create(dpy);
@@ -5875,12 +5884,8 @@ void update_title(struct wl_listener *listener, void *data) {
         print_status();
 }
 
-/* Mark an unfocused window as needing attention. */
-void urgent(struct wl_listener *listener, void *data) {
-    struct wlr_xdg_activation_v1_request_activate_event *event = data;
-    client_t                                            *c     = nullptr;
-    toplevel_from_wlr_surface(event->surface, &c, nullptr);
-
+/* Mark an unfocused managed window as needing attention. */
+void mark_urgent(client_t *c) {
     if (!c || c == focus_top(selmon))
         return;
 
@@ -5889,6 +5894,24 @@ void urgent(struct wl_listener *listener, void *data) {
 
     if (client_surface(c)->mapped)
         client_set_border_color(c, urgentcolor);
+}
+
+/* Handle an activation request as an urgency notification. */
+void urgent(struct wl_listener *listener, void *data) {
+    struct wlr_xdg_activation_v1_request_activate_event *event = data;
+    client_t                                            *c     = nullptr;
+
+    toplevel_from_wlr_surface(event->surface, &c, nullptr);
+    mark_urgent(c);
+}
+
+/* Turn a system bell request associated with a surface into window urgency. */
+void ring_system_bell(struct wl_listener *listener, void *data) {
+    struct wlr_xdg_system_bell_v1_ring_event *event = data;
+    client_t                                 *c     = nullptr;
+
+    toplevel_from_wlr_surface(event->surface, &c, nullptr);
+    mark_urgent(c);
 }
 
 /* Show a numbered workspace or return to the previously shown one. */
