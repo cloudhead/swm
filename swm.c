@@ -70,6 +70,7 @@
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_activation_v1.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
+#include <wlr/types/wlr_xdg_dialog_v1.h>
 #include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
@@ -209,6 +210,10 @@ typedef struct {
     struct wl_listener                         fullscreen;
     struct wl_listener                         set_decoration_mode;
     struct wl_listener                         destroy_decoration;
+    struct wlr_xdg_dialog_v1                  *dialog;
+    struct wl_listener                         dialog_destroy;
+    struct wl_listener                         dialog_modal;
+    struct wl_listener                         set_parent;
     struct wl_listener                         activate;
     struct wl_listener                         associate;
     struct wl_listener                         dissociate;
@@ -489,6 +494,7 @@ static void      text_input_enable_notify(struct wl_listener *listener, void *da
 static void      focus_monitor(const arg_t *arg);
 static void      focus_stack(const arg_t *arg);
 static client_t *focus_top(monitor_t *m);
+static bool      client_is_blocked(client_t *c);
 static void      fullscreen_notify(struct wl_listener *listener, void *data);
 static void      gpu_reset(struct wl_listener *listener, void *data);
 static int       handle_signal(int signo, void *data);
@@ -586,6 +592,9 @@ static void       update_monitors(struct wl_listener *listener, void *data);
 static void       update_app_id(struct wl_listener *listener, void *data);
 static void       update_title(struct wl_listener *listener, void *data);
 static void       urgent(struct wl_listener *listener, void *data);
+static void       create_dialog(struct wl_listener *listener, void *data);
+static void       dialog_changed(struct wl_listener *listener, void *data);
+static void       dialog_destroyed(struct wl_listener *listener, void *data);
 static void       view(const arg_t *arg);
 static void       virtual_keyboard(struct wl_listener *listener, void *data);
 static void       virtual_pointer(struct wl_listener *listener, void *data);
@@ -622,6 +631,7 @@ static struct wlr_compositor *compositor;
 static struct wlr_session    *session;
 
 static struct wlr_xdg_shell                             *xdg_shell;
+static struct wlr_xdg_wm_dialog_v1                      *xdg_dialog_mgr;
 static struct wlr_xdg_activation_v1                     *activation;
 static struct wlr_xdg_decoration_manager_v1             *xdg_decoration_mgr;
 static struct wl_list                                    clients; /* tiling order */
@@ -699,6 +709,7 @@ static struct wl_listener new_xdg_toplevel                 = { .notify = create_
 static struct wl_listener new_text_input                   = { .notify = text_input_create_notify };
 static struct wl_listener new_xdg_popup                    = { .notify = create_popup };
 static struct wl_listener new_xdg_decoration               = { .notify = create_decoration };
+static struct wl_listener new_xdg_dialog                   = { .notify = create_dialog };
 static struct wl_listener new_layer_surface                = { .notify = create_layer_surface };
 static struct wl_listener output_mgr_apply                 = { .notify = output_manager_apply };
 static struct wl_listener output_mgr_test                  = { .notify = output_manager_test };
@@ -1988,6 +1999,7 @@ void cleanup_listeners(void) {
     wl_list_remove(&new_xdg_toplevel.link);
     wl_list_remove(&new_text_input.link);
     wl_list_remove(&new_xdg_decoration.link);
+    wl_list_remove(&new_xdg_dialog.link);
     wl_list_remove(&new_xdg_popup.link);
     wl_list_remove(&new_layer_surface.link);
     wl_list_remove(&ext_ftl_capture_request.link);
@@ -2494,6 +2506,40 @@ void create_notify(struct wl_listener *listener, void *data) {
     LISTEN(&toplevel->events.request_maximize, &c->maximize, maximize_notify);
     LISTEN(&toplevel->events.set_title, &c->set_title, update_title);
     LISTEN(&toplevel->events.set_app_id, &c->set_appid, update_app_id);
+    LISTEN(&toplevel->events.set_parent, &c->set_parent, dialog_changed);
+}
+
+/* Track modal state for a newly created XDG dialog. */
+void create_dialog(struct wl_listener *listener, void *data) {
+    struct wlr_xdg_dialog_v1 *dialog = data;
+    client_t                 *c      = dialog->xdg_toplevel->base->data;
+
+    if (!c)
+        return;
+    c->dialog = dialog;
+    LISTEN(&dialog->events.set_modal, &c->dialog_modal, dialog_changed);
+    LISTEN(&dialog->events.destroy, &c->dialog_destroy, dialog_destroyed);
+    dialog_changed(&c->dialog_modal, nullptr);
+}
+
+/* Re-evaluate focus and pointer targets after dialog relationship changes. */
+void dialog_changed(struct wl_listener *listener, void *data) {
+    client_t *focused = nullptr;
+
+    toplevel_from_wlr_surface(seat->keyboard_state.focused_surface, &focused, nullptr);
+    if (focused && client_is_blocked(focused))
+        focus_client(focus_top(focused->mon), 1);
+    motion_notify(0, nullptr, 0, 0, 0, 0, 1);
+}
+
+/* Stop tracking a destroyed dialog and immediately restore parent interaction. */
+void dialog_destroyed(struct wl_listener *listener, void *data) {
+    client_t *c = wl_container_of(listener, c, dialog_destroy);
+
+    wl_list_remove(&c->dialog_modal.link);
+    wl_list_remove(&c->dialog_destroy.link);
+    c->dialog = nullptr;
+    dialog_changed(nullptr, nullptr);
 }
 
 /* Attach a pointer device and apply its configured input settings. */
@@ -2711,6 +2757,13 @@ void destroy_notify(struct wl_listener *listener, void *data) {
         wl_list_remove(&c->map.link);
         wl_list_remove(&c->unmap.link);
         wl_list_remove(&c->maximize.link);
+        wl_list_remove(&c->set_parent.link);
+
+        if (c->dialog) {
+            wl_list_remove(&c->dialog_modal.link);
+            wl_list_remove(&c->dialog_destroy.link);
+            c->dialog = nullptr;
+        }
 
         if (c->decoration) {
             wl_list_remove(&c->destroy_decoration.link);
@@ -2807,6 +2860,9 @@ void focus_client(client_t *c, int lift) {
     if (locked)
         return;
 
+    if (c && client_is_blocked(c))
+        c = focus_top(c->mon);
+
     /* Raise the window when requested. */
     if (c && lift)
         wlr_scene_node_raise_to_top(&c->scene->node);
@@ -2877,6 +2933,22 @@ client_t *client_main(client_t *c) {
     return c;
 }
 
+/* Return whether a mapped modal XDG child blocks this direct parent. */
+bool client_is_blocked(client_t *c) {
+    client_t *child;
+
+    if (!c || client_is_x11(c))
+        return false;
+
+    wl_list_for_each(child, &clients, link) {
+        if (!client_is_x11(child) && child->dialog && child->dialog->modal &&
+            client_surface(child)->mapped &&
+            child->surface.xdg->toplevel->parent == c->surface.xdg->toplevel)
+            return true;
+    }
+    return false;
+}
+
 /* Return whether two clients belong to one group. */
 bool clients_related(client_t *a, client_t *b) {
     return a && b && client_main(a) == client_main(b);
@@ -2890,7 +2962,7 @@ client_t *focus_close(client_t *c) {
     if (!c || !c->mon)
         return nullptr;
 
-    if ((p = client_get_parent(c)) && VISIBLEON(p, c->mon))
+    if ((p = client_get_parent(c)) && VISIBLEON(p, c->mon) && !client_is_blocked(p))
         return p;
 
     for (node = c->link.prev; node != &c->link; node = node->prev) {
@@ -2898,7 +2970,7 @@ client_t *focus_close(client_t *c) {
             continue;
         p = wl_container_of(node, p, link);
 
-        if (VISIBLEON(p, c->mon) && !clients_related(p, c))
+        if (VISIBLEON(p, c->mon) && !client_is_blocked(p) && !clients_related(p, c))
             return p;
     }
     return nullptr;
@@ -2931,7 +3003,7 @@ void focus_stack(const arg_t *arg) {
             continue;
         c = wl_container_of(node, c, link);
 
-        if (VISIBLEON(c, selmon) && !client_get_parent(c)) {
+        if (VISIBLEON(c, selmon) && !client_is_blocked(c) && !client_get_parent(c)) {
             bool fullscreen = sel->is_fullscreen;
 
             if (fullscreen)
@@ -2952,13 +3024,13 @@ void focus_main(const arg_t *arg) {
     client_t *c, *sel = focus_top(selmon);
 
     wl_list_for_each(c, &clients, link) {
-        if (VISIBLEON(c, selmon) && !c->is_floating) {
+        if (VISIBLEON(c, selmon) && !client_is_blocked(c) && !c->is_floating) {
             if (c != sel) {
                 focus_client(c, 1);
             } else {
                 client_t *p;
                 wl_list_for_each(p, &fstack, flink) {
-                    if (p != sel && VISIBLEON(p, selmon)) {
+                    if (p != sel && VISIBLEON(p, selmon) && !client_is_blocked(p)) {
                         focus_client(p, 1);
                         break;
                     }
@@ -2989,7 +3061,7 @@ void focus_urgent(const arg_t *arg) {
 client_t *focus_top(monitor_t *m) {
     client_t *c;
     wl_list_for_each(c, &fstack, flink) {
-        if (VISIBLEON(c, m))
+        if (VISIBLEON(c, m) && !client_is_blocked(c))
             return c;
     }
     return nullptr;
@@ -5271,6 +5343,9 @@ void setup(void) {
     wl_signal_add(&xdg_shell->events.new_toplevel, &new_xdg_toplevel);
     wl_signal_add(&xdg_shell->events.new_popup, &new_xdg_popup);
 
+    xdg_dialog_mgr = wlr_xdg_wm_dialog_v1_create(dpy, 1);
+    wl_signal_add(&xdg_dialog_mgr->events.new_dialog, &new_xdg_dialog);
+
     layer_shell = wlr_layer_shell_v1_create(dpy, 3);
     wl_signal_add(&layer_shell->events.new_surface, &new_layer_surface);
 
@@ -5901,6 +5976,10 @@ void point_to_node(
         if (c && c->type == LAYER_SHELL) {
             c = nullptr;
             l = pnode->data;
+        }
+        if (c && client_is_blocked(c)) {
+            c       = nullptr;
+            surface = nullptr;
         }
     }
     if (psurface)
