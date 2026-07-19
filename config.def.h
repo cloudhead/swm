@@ -27,7 +27,7 @@ static const float        bordercolor[] = RGBA(0x101010ff);
 /* Draw this color around the focused window. */
 static const float        focuscolor[]  = RGBA(0x404040ff);
 /* Draw this color around a window requesting attention. */
-static const float        urgentcolor[] = RGBA(0xff0000ff);
+static const float        urgentcolor[] = RGBA(0xb03060ff);
 /* Place this translucent color behind matching layer surfaces. */
 static const float        dimcolor[]    = RGBA(0x00000080);
 
