@@ -86,6 +86,12 @@ config.h:
 fmt:
 	git ls-files "*.c" "*.h" | xargs clang-format -i
 
+formal:
+	@for source in formal/*.agda; do \
+		echo "agda $$source"; \
+		agda --safe --no-libraries --ignore-interfaces "$$source" || exit; \
+	done
+
 install: swm swm.1
 	install -Dm755 swm $(DESTDIR)$(PREFIX)/bin/swm
 	install -Dm644 swm.1 $(DESTDIR)$(MANDIR)/man1/swm.1
@@ -104,6 +110,6 @@ package: PKGBUILD
 	makepkg --force
 
 clean:
-	rm -f swm swm.1 *.o *-protocol.h *-protocol.c
+	rm -f swm swm.1 *.o *-protocol.h *-protocol.c formal/*.agdai
 
-.PHONY: all man fmt install uninstall archive package clean
+.PHONY: all man fmt formal install uninstall archive package clean

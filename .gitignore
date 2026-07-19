@@ -6,3 +6,4 @@ config.h
 *-protocol.c
 *-protocol.h
 *.coverage
+*.agdai
