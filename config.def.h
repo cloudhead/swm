@@ -148,7 +148,6 @@ static const char *const autostart[] = {
     "foot",                               "--login-shell",                                           nullptr,
     "waybar",                                                                                        nullptr,
     "swaybg",                             "-m", "tile", "-i", "$HOME/images/wallpaper.png",          nullptr,
-    "flameshot",                                                                                     nullptr,
     "sh",                                 "-c", "wl-paste --type text --watch cliphist store",       nullptr,
     "sh",                                 "-c", "wl-paste --type image --watch cliphist store",      nullptr,
     nullptr /* End the command list. */
