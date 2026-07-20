@@ -121,11 +121,23 @@ Run the complete test suite with:
 
     make test
 
-It builds unit tests and protocol clients, runs a headless nested-compositor
-integration suite (including a two-output run), collects LLVM source coverage,
-and requires at least 80% aggregate production-code line coverage. The test
-target therefore also requires LLVM's coverage tools, a POSIX shell, and the
-runtime libraries needed by the normal build.
+Make builds one focused C unit-test binary and a test compositor, then the
+Python runner executes them alongside native Wayland and XWayland clients,
+including a two-output run. Unchanged binaries are reused; use the narrower
+targets while developing:
+
+    make test-unit
+    make test-integration
+
+Coverage is informational and has its own target:
+
+    make coverage
+
+Generated test files live under `test/.build/`; remove them with
+`make test-clean`. All targets require Python 3 and the normal build
+dependencies. Integration tests additionally require PyWayland and its protocol
+scanner, xcffib, wlr-randr, and Xwayland; coverage requires LLVM's coverage
+tools.
 
 Other development targets are:
 

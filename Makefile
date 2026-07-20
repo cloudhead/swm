@@ -32,6 +32,17 @@ HDRS  := config.h swm.h util.h $(PROTO)
 WL_SCANNER := $(shell $(PKG_CONFIG) --variable=wayland_scanner wayland-scanner)
 WL_PROTO   := $(shell $(PKG_CONFIG) --variable=pkgdatadir wayland-protocols)
 
+TEST_BUILD    ?= test/.build
+TEST_SRC      := $(TEST_BUILD)/source
+TEST_BIN      := $(TEST_BUILD)/bin
+TEST_CPPFLAGS := -I$(TEST_SRC) $(CPPFLAGS)
+TEST_CFLAGS   := -std=c23 -g -O0 \
+	-Wno-unused-function -Wno-unused-variable -Wno-unused-parameter
+
+ifeq ($(TEST_COVERAGE),1)
+TEST_CFLAGS += -fprofile-instr-generate -fcoverage-mapping
+endif
+
 all: man swm
 
 man: swm.1
@@ -106,4 +117,46 @@ package: PKGBUILD
 clean:
 	rm -f swm swm.1 *.o *-protocol.h *-protocol.c
 
-.PHONY: all man fmt install uninstall archive package clean
+$(TEST_SRC) $(TEST_BIN):
+	@mkdir -p $@
+
+$(TEST_SRC)/swm.c: swm.c | $(TEST_SRC)
+	@cp -p $< $@
+
+$(TEST_SRC)/config.h: config.def.h | $(TEST_SRC)
+	@cp -p $< $@
+
+TEST_COMMON := Makefile config.mk $(TEST_SRC)/swm.c $(TEST_SRC)/config.h \
+	swm.h util.c util.h $(PROTO) ext-workspace-v1-protocol.c
+
+$(TEST_BIN)/unit: test/unit.c $(TEST_COMMON) | $(TEST_BIN)
+	@echo "cc   test/unit.c => $@"
+	@$(CC) $(TEST_CPPFLAGS) $(TEST_CFLAGS) test/unit.c util.c \
+		ext-workspace-v1-protocol.c $(LDLIBS) -o $@
+
+$(TEST_BIN)/swm: $(TEST_COMMON) | $(TEST_BIN)
+	@echo "cc   swm.c => $@"
+	@$(CC) $(TEST_CPPFLAGS) $(TEST_CFLAGS) $(TEST_SRC)/swm.c util.c \
+		ext-workspace-v1-protocol.c $(LDLIBS) -o $@
+
+test-build: $(TEST_BIN)/unit $(TEST_BIN)/swm
+
+test: test-build
+	@SWM_TEST_BUILD=$(abspath $(TEST_BUILD)) PKG_CONFIG=$(PKG_CONFIG) $(PYTHON) test/run.py
+
+test-unit: $(TEST_BIN)/unit
+	@SWM_TEST_BUILD=$(abspath $(TEST_BUILD)) PKG_CONFIG=$(PKG_CONFIG) $(PYTHON) test/run.py unit
+
+test-integration: $(TEST_BIN)/swm
+	@SWM_TEST_BUILD=$(abspath $(TEST_BUILD)) PKG_CONFIG=$(PKG_CONFIG) $(PYTHON) test/run.py integration
+
+coverage:
+	@$(MAKE) --no-print-directory TEST_BUILD=$(TEST_BUILD)/coverage TEST_COVERAGE=1 test-build
+	@SWM_TEST_BUILD=$(abspath $(TEST_BUILD)/coverage) PKG_CONFIG=$(PKG_CONFIG) \
+		$(PYTHON) test/run.py coverage
+
+test-clean:
+	@SWM_TEST_BUILD=$(abspath $(TEST_BUILD)) $(PYTHON) test/run.py clean
+
+.PHONY: all man fmt install uninstall archive package clean coverage
+.PHONY: test-build test test-unit test-integration test-clean

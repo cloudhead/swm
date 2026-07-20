@@ -1,6 +1,7 @@
 VERSION    = 1.0.0
 PKG_CONFIG = pkg-config
 CC         = clang
+PYTHON    ?= python3
 PREFIX     = /usr/local
 MANDIR     = $(PREFIX)/share/man
 DATADIR    = $(PREFIX)/share
