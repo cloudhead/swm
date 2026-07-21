@@ -105,11 +105,14 @@ See `man swm` for the full set of key bindings.
 swm has no built-in bar. A layer-shell bar such as Waybar[2] can use the
 `ext/workspaces` module, backed by swm's ext-workspace-v1 implementation.
 Empty inactive workspaces are advertised as hidden; occupied and selected
-workspaces remain visible.
+workspaces remain visible. See `swmctl(1)` for workspace metadata and Waybar
+integration.
 
 On each state change swm also writes line-oriented status records to standard
 output. When `-s` is used, that output is connected to the startup command's
-standard input. The active window title is published atomically to
+standard input. Workspace metadata uses `workspace N title VALUE` and
+`workspace N color #RRGGBBAA` records; empty values mean unset. The active window
+title is published atomically to
 `$XDG_RUNTIME_DIR/swm-title`, which can be consumed by a custom bar module.
 Visible window rectangles are published atomically to
 `$XDG_RUNTIME_DIR/swm-windows` in the format accepted by `slurp -r`.

@@ -190,7 +190,7 @@ def prepare_suite(unit: bool, integration: bool) -> None:
 
     binaries = [
         BIN / name
-        for name, selected in (("unit", unit), ("swm", integration))
+        for name, selected in (("unit", unit), ("swm", integration), ("swmctl", integration))
         if selected
     ]
     missing = [binary for binary in binaries if not binary.exists()]
@@ -376,6 +376,63 @@ def integration_session() -> None:
         wait_title(current)
 
     test("workspaces", workspaces)
+
+    def workspace_metadata() -> None:
+        def field(name: str) -> str:
+            return run(BIN / "swmctl", "workspace", "get", 3, name).removesuffix("\n")
+
+        subscription_log = client_log("workspace-subscribe")
+        subscriber = spawn(
+            subscription_log,
+            BIN / "swmctl",
+            "workspace",
+            "subscribe",
+            "--format=waybar",
+            env=os.environ.copy(),
+        )
+        eventually("initial workspace metadata", lambda: subscription_log.stat().st_size)
+        run(BIN / "swmctl", "workspace", "set", 3, "title", "code")
+        run(BIN / "swmctl", "workspace", "set", 3, "color", "#81a1c180")
+        state = {
+            "workspace": 3,
+            "title": field("title"),
+            "color": field("color"),
+            "selected": field("selected") == "true",
+        }
+        if state != {
+            "workspace": 3,
+            "title": "code",
+            "color": "#81a1c180",
+            "selected": False,
+        }:
+            raise Failure(f"unexpected workspace metadata: {state!r}")
+        listed = run(BIN / "swmctl", "workspace", "list").splitlines()
+        if "3" not in listed:
+            raise Failure(f"workspace missing from list: {listed!r}")
+        run(BIN / "swmctl", "workspace", "set", 3, "color", "#00000000")
+        if field("color"):
+            raise Failure("zero RGBA color was not cleared")
+        run(BIN / "swmctl", "workspace", "set", 3, "color", "#000000")
+        if field("color") != "#000000":
+            raise Failure("opaque black color was not retained")
+        run(BIN / "swmctl", "workspace", "clear", 3, "color")
+        if field("title") != "code" or field("color"):
+            raise Failure("workspace color was not cleared")
+        run(BIN / "swmctl", "workspace", "set", 3, "color", "#81a1c1")
+        protocol("workspace", 3)
+        eventually(
+            "subscribed workspace metadata",
+            lambda: "#81a1c1" in subscription_log.read_text()
+            and "code" in subscription_log.read_text(),
+        )
+        run(BIN / "swmctl", "workspace", "clear", 3, "title")
+        run(BIN / "swmctl", "workspace", "clear", 3, "color")
+        if field("title") or field("color") or field("selected") != "true":
+            raise Failure("workspace metadata was not cleared")
+        protocol("workspace", 1)
+        terminate(subscriber)
+
+    test("workspace metadata", workspace_metadata)
 
     def layout_configuration() -> None:
         before_one = geometry("one")

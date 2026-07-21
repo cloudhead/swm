@@ -26,6 +26,11 @@ ext-workspace-v1 and wlr-layer-shell, such as *waybar*(5), work out of the box.
 Users are encouraged to customize *swm* by editing the sources, in particular
 _config.h_.
 
+*swmctl*(1) can associate additional ephemeral titles and colors with
+workspaces. These do not replace the numbered ext-workspace names and are only
+shown by explicitly configured consumers. All workspace metadata is discarded
+when *swm* exits.
+
 == OPTIONS
 
 *-v*::
@@ -107,7 +112,7 @@ resized with Mod-right-click. Mod-middle-click toggles floating.
 
 == SEE ALSO
 
-*foot*(1), *wmenu*(1)
+*foot*(1), *swmctl*(1), *wmenu*(1)
 
 == AUTHORS
 

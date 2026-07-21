@@ -1,0 +1,86 @@
+= swmctl(1)
+:doctype: manpage
+:manmanual: SWM Manual
+:mansource: swm 1.0.0
+
+== NAME
+
+swmctl - inspect and change swm workspace metadata
+
+== SYNOPSIS
+
+*swmctl workspace list*
+
+*swmctl workspace get* _N_ (*title*|*color*|*selected*)
+
+*swmctl workspace set* _N_ (*title* _TITLE_|*color* _#RRGGBB[AA]_)
+
+*swmctl workspace clear* _N_ (*title*|*color*)
+
+*swmctl workspace subscribe* [*--format=waybar*]
+
+== DESCRIPTION
+
+*swmctl* connects to the running *swm* Wayland compositor and reads or changes
+the title and color associated with a workspace. This metadata is ephemeral: it
+is stored only in compositor memory and is discarded when *swm* exits.
+
+An empty title clears the additional label. It does not change the numeric
+workspace name. A cleared color tells consumers to use their default color.
+Colors use six-digit RGB or eight-digit RGBA notation. RGB implies full
+opacity. `#00000000` means unset, while `#000000` represents opaque black.
+
+*set* changes one named field. *clear* clears one named field.
+
+*get* prints one field value. An unset title or color produces an empty line;
+*selected* produces `true` or `false`.
+
+*subscribe* writes a JSON array containing the current metadata, then writes a
+new array after every change. Each array occupies one line, making the command
+suitable for custom bars and other long-running consumers.
+
+With *--format=waybar*, *subscribe* instead writes Waybar custom-module JSON
+for the workspace on swm's selected output. Its additional title becomes the
+module text and its color becomes the text foreground. An unset title produces
+empty text. Configure the module with `return-type` set to `json` and `escape`
+set to `false`.
+
+== WAYBAR
+
+The `ext/workspaces` module continues to display the numeric workspace names
+`1` through `10`. A custom module can display the additional title and color
+independently:
+
+    "modules-center": ["custom/workspace-title"],
+    "custom/workspace-title": {
+        "exec": "swmctl workspace subscribe --format=waybar",
+        "return-type": "json",
+        "escape": false,
+        "hide-empty-text": true
+    }
+
+The custom module follows the workspace on swm's selected output and uses its
+color for the title text.
+
+== EXAMPLES
+
+Set both fields for workspace 3:
+
+    swmctl workspace set 3 title "Prototyping new window manager"
+    swmctl workspace set 3 color "#81a1c1"
+
+Print its title:
+
+    swmctl workspace get 3 title
+
+Clear only its color:
+
+    swmctl workspace clear 3 color
+
+List every workspace number:
+
+    swmctl workspace list
+
+== SEE ALSO
+
+*swm*(1), *waybar*(5)

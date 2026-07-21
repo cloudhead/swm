@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="swm_workspace_v1">
+  <copyright>
+    Copyright (C) 2026 swm contributors
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+  </copyright>
+
+  <interface name="swm_workspace_manager_v1" version="1">
+    <description summary="inspect and change swm workspace metadata">
+      This interface exposes ephemeral titles and colors associated with
+      swm's fixed workspaces. Metadata exists only for the lifetime of the
+      compositor process.
+
+      When a client binds, the compositor sends one metadata event for every
+      workspace followed by done. Later changes are sent in the same way.
+    </description>
+
+    <enum name="error">
+      <entry name="invalid_workspace" value="1" summary="workspace number is out of range"/>
+      <entry name="title_too_long" value="2" summary="workspace title is too long"/>
+    </enum>
+
+    <enum name="metadata">
+      <entry name="title" value="1" summary="the title is non-empty"/>
+      <entry name="color" value="2" summary="the color is set"/>
+      <entry name="selected" value="4" summary="the workspace is selected by swm"/>
+    </enum>
+
+    <event name="metadata">
+      <description summary="workspace metadata">
+        The workspace number starts at one. Color is encoded as 0xRRGGBBAA;
+        zero means unset and omits the color bit from flags. An empty
+        title means the additional label is unset. Selected identifies the
+        workspace on swm's currently selected output.
+      </description>
+      <arg name="workspace" type="uint" summary="one-based workspace number"/>
+      <arg name="flags" type="uint" enum="metadata"/>
+      <arg name="title" type="string"/>
+      <arg name="color" type="uint" summary="color encoded as 0xRRGGBBAA"/>
+    </event>
+
+    <event name="done">
+      <description summary="metadata update is complete"/>
+    </event>
+
+    <request name="set_title">
+      <description summary="set a workspace title">
+        Set the title of a workspace. An empty title clears it.
+      </description>
+      <arg name="workspace" type="uint" summary="one-based workspace number"/>
+      <arg name="title" type="string"/>
+    </request>
+
+    <request name="set_color">
+      <description summary="set a workspace color">
+        Set the color of a workspace. Zero clears it.
+      </description>
+      <arg name="workspace" type="uint" summary="one-based workspace number"/>
+      <arg name="color" type="uint" summary="color encoded as 0xRRGGBBAA"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="release the manager object"/>
+    </request>
+  </interface>
+</protocol>

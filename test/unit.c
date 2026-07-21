@@ -56,6 +56,7 @@ static void test_pools(void) {
     test_pool(&static_listener_pool);
     test_pool(&workspace_manager_pool);
     test_pool(&workspace_handle_pool);
+    test_pool(&metadata_manager_pool);
 }
 
 /* Require a geometry helper to return the expected rectangle. */
@@ -167,6 +168,9 @@ static void test_utilities(void) {
     assert(env_expand(output, sizeof(output), "$SWM_TEST_ENV/tail") == 17);
     assert(!strcmp(output, "hello world/tail"));
     assert(env_expand(output, 4, "$SWM_TEST_ENV") == 0);
+    assert(env_expand(output, 0, "value") == 0);
+    assert(env_expand(output, sizeof(output), "$1") == 3);
+    assert(!strcmp(output, "$1"));
 }
 
 /* Verify free-workspace selection and published workspace states. */
@@ -429,6 +433,7 @@ static void test_commands_without_clients(void) {
     wl_list_init(&fstack);
     wl_list_init(&mons);
     wl_list_init(&ws_managers);
+    wl_list_init(&metadata_managers);
     selmon = &monitor;
     unsetenv("XDG_RUNTIME_DIR");
 

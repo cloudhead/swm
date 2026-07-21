@@ -83,6 +83,7 @@
 #include <xkbcommon/xkbcommon.h>
 
 #include "ext-workspace-v1-protocol.h"
+#include "swm-workspace-v1-protocol.h"
 #include "swm.h"
 #include "util.h"
 #include "xdg-shell-protocol.h"
@@ -109,6 +110,7 @@
 #define MAX_WINDOW_STATE_FIELD  256
 #define MAX_WINDOW_STATE_LINE   1024
 #define MAX_STATE_PATH          4096
+#define MAX_WORKSPACE_TITLE     256
 #define MAX_WS_ID               16
 #define MAX_STATIC_LISTENERS    512
 #define MAX_WS_MANAGERS         64
@@ -318,6 +320,8 @@ typedef struct {
 /* A workspace owns its windows and layout settings, and can appear on only one display. */
 struct workspace_t {
     char            name[4];
+    char            title[MAX_WORKSPACE_TITLE]; /* Ephemeral human-readable label. */
+    uint32_t        color; /* Ephemeral color encoded as 0xRRGGBBAA; zero means unset. */
     int             idx;
     monitor_t      *mon; /* Display showing this workspace, or nullptr if hidden. */
     const layout_t *lt;
@@ -342,6 +346,12 @@ typedef struct {
     workspace_manager_t *mgr;  /* nullptr after the manager is destroyed. */
     struct wl_list       link; /* Entry in workspace_t.handles. */
 } workspace_handle_t;
+
+/* Bound client for swm's ephemeral workspace metadata protocol. */
+typedef struct {
+    struct wl_resource *resource;
+    struct wl_list      link;
+} metadata_manager_t;
 
 /* Spawn awaiting workspace assignment. */
 typedef struct {
@@ -575,8 +585,12 @@ static void         assign_workspace(workspace_t *ws, monitor_t *m);
 static workspace_t *free_workspace(void);
 static void         view_workspace(workspace_t *ws, monitor_t *m);
 static void         workspace_broadcast(void);
-static void         workspace_handle_create(workspace_manager_t *mgr, workspace_t *ws);
-static void         workspace_manager_bind(
+static void         workspace_metadata_bind(
+    struct wl_client *client, void *data, uint32_t version, uint32_t id
+);
+static void workspace_metadata_broadcast(void);
+static void workspace_handle_create(workspace_manager_t *mgr, workspace_t *ws);
+static void workspace_manager_bind(
     struct wl_client *client, void *data, uint32_t version, uint32_t id
 );
 static void       workspace_output_bind(struct wl_listener *listener, void *data);
@@ -695,10 +709,11 @@ static struct wlr_box    grabgeom;
 static struct wlr_output_layout *output_layout;
 static struct wlr_box            sgeom;
 static struct wl_list            mons;
-static struct wl_list            ws_managers;    /* workspace_manager_t.link */
-static struct wl_list            pending_spawns; /* pending_spawn_t.link */
-static struct wl_list            window_states;  /* window_state_t.link */
-static struct wl_list            input_popups;   /* input_popup_t.link */
+static struct wl_list            ws_managers;       /* workspace_manager_t.link */
+static struct wl_list            metadata_managers; /* metadata_manager_t.link */
+static struct wl_list            pending_spawns;    /* pending_spawn_t.link */
+static struct wl_list            window_states;     /* window_state_t.link */
+static struct wl_list            input_popups;      /* input_popup_t.link */
 static int                       virtual_keyboards;
 static monitor_t                *selmon;
 static bool                      arranging_pointer_focus;
@@ -810,6 +825,7 @@ static window_state_t       window_state_items[MAX_WINDOW_STATES];
 static static_listener_t    static_listener_items[MAX_STATIC_LISTENERS];
 static workspace_manager_t  workspace_manager_items[MAX_WS_MANAGERS];
 static workspace_handle_t   workspace_handle_items[MAX_WS_HANDLES];
+static metadata_manager_t   metadata_manager_items[MAX_WS_MANAGERS];
 
 static bool client_used[MAX_CLIENTS], monitor_used[MAX_MONITORS];
 static bool layer_surface_used[MAX_LAYER_SURFACES], keyboard_group_used[MAX_KEYBOARD_GROUPS];
@@ -817,7 +833,7 @@ static bool pointer_constraint_used[MAX_POINTER_CONSTRAINTS], text_input_used[MA
 static bool input_popup_used[MAX_INPUT_POPUPS], session_lock_used[MAX_SESSION_LOCKS];
 static bool pending_spawn_used[MAX_PENDING_SPAWNS], window_state_used[MAX_WINDOW_STATES];
 static bool static_listener_used[MAX_STATIC_LISTENERS], workspace_manager_used[MAX_WS_MANAGERS];
-static bool workspace_handle_used[MAX_WS_HANDLES];
+static bool workspace_handle_used[MAX_WS_HANDLES], metadata_manager_used[MAX_WS_MANAGERS];
 
 static pool_t client_pool = {
     client_items, client_used, LENGTH(client_items), sizeof *client_items, "client"
@@ -880,6 +896,11 @@ static pool_t workspace_handle_pool   = { workspace_handle_items,
                                           LENGTH(workspace_handle_items),
                                           sizeof *workspace_handle_items,
                                           "workspace_handle" };
+static pool_t metadata_manager_pool   = { metadata_manager_items,
+                                          metadata_manager_used,
+                                          LENGTH(metadata_manager_items),
+                                          sizeof *metadata_manager_items,
+                                          "metadata_manager" };
 
 /* Backend-specific client operations. */
 /* Client helpers shared by the XDG shell and Xwayland implementations. These
@@ -4453,6 +4474,7 @@ void print_status(void) {
     char        titlepath[4096], tmppath[4096], title[1024], appid[1024];
     const char *runtime, *src;
     uint32_t    occ, urg;
+    int         i;
 
     occ = urg = 0;
     wl_list_for_each(c, &clients, link) {
@@ -4489,6 +4511,14 @@ void print_status(void) {
             m->ws ? 1u << m->ws->idx : 0,
             urg
         );
+    }
+    for (i = 0; i < WSCOUNT; i++) {
+        status_field(title, sizeof(title), workspaces[i].title);
+        printf("workspace %d title %s\n", i + 1, title);
+        if (workspaces[i].color)
+            printf("workspace %d color #%08" PRIx32 "\n", i + 1, workspaces[i].color);
+        else
+            printf("workspace %d color \n", i + 1);
     }
     runtime = getenv("XDG_RUNTIME_DIR");
     publish_windows(runtime);
@@ -5032,6 +5062,137 @@ void view_workspace(workspace_t *ws, monitor_t *m) {
     print_status();
 }
 
+/* Send one workspace's ephemeral metadata to a control client. */
+static void workspace_metadata_send(struct wl_resource *resource, workspace_t *ws) {
+    uint32_t flags = 0;
+
+    if (ws->title[0])
+        flags |= SWM_WORKSPACE_MANAGER_V1_METADATA_TITLE;
+    if (ws->color)
+        flags |= SWM_WORKSPACE_MANAGER_V1_METADATA_COLOR;
+    if (selmon && selmon->ws == ws)
+        flags |= SWM_WORKSPACE_MANAGER_V1_METADATA_SELECTED;
+    swm_workspace_manager_v1_send_metadata(
+        resource, (uint32_t)ws->idx + 1, flags, ws->title, ws->color
+    );
+}
+
+/* Send a complete workspace metadata snapshot to one control client. */
+static void workspace_metadata_snapshot(struct wl_resource *resource) {
+    int i;
+
+    for (i = 0; i < WSCOUNT; i++)
+        workspace_metadata_send(resource, &workspaces[i]);
+    swm_workspace_manager_v1_send_done(resource);
+}
+
+/* Publish all workspace metadata to every connected control client. */
+static void workspace_metadata_broadcast(void) {
+    metadata_manager_t *mgr;
+
+    wl_list_for_each(mgr, &metadata_managers, link) workspace_metadata_snapshot(mgr->resource);
+}
+
+/* Return a requested workspace or report a protocol error. */
+static workspace_t *workspace_metadata_get(struct wl_resource *resource, uint32_t number) {
+    if (!number || number > WSCOUNT) {
+        wl_resource_post_error(
+            resource,
+            SWM_WORKSPACE_MANAGER_V1_ERROR_INVALID_WORKSPACE,
+            "workspace %" PRIu32 " is outside 1..%d",
+            number,
+            WSCOUNT
+        );
+        return nullptr;
+    }
+    return &workspaces[number - 1];
+}
+
+/* Change an ephemeral workspace title. */
+static void workspace_metadata_set_title(
+    struct wl_client *client, struct wl_resource *resource, uint32_t number, const char *title
+) {
+    workspace_t *ws = workspace_metadata_get(resource, number);
+
+    if (!ws)
+        return;
+    if (strlen(title) >= sizeof(ws->title)) {
+        wl_resource_post_error(
+            resource,
+            SWM_WORKSPACE_MANAGER_V1_ERROR_TITLE_TOO_LONG,
+            "workspace title exceeds %zu bytes",
+            sizeof(ws->title) - 1
+        );
+        return;
+    }
+    if (!strcmp(ws->title, title))
+        return;
+    strcpy(ws->title, title);
+    print_status();
+}
+
+/* Change an ephemeral workspace color. */
+static void workspace_metadata_set_color(
+    struct wl_client *client, struct wl_resource *resource, uint32_t number, uint32_t color
+) {
+    workspace_t *ws = workspace_metadata_get(resource, number);
+
+    if (!ws)
+        return;
+    if (ws->color == color)
+        return;
+    ws->color = color;
+    print_status();
+}
+
+/* Release an ephemeral workspace metadata manager. */
+static void workspace_metadata_destroy_request(
+    struct wl_client *client, struct wl_resource *resource
+) {
+    wl_resource_destroy(resource);
+}
+
+static const struct swm_workspace_manager_v1_interface workspace_metadata_impl = {
+    .set_title = workspace_metadata_set_title,
+    .set_color = workspace_metadata_set_color,
+    .destroy   = workspace_metadata_destroy_request,
+};
+
+/* Stop publishing workspace metadata after a client disconnects. */
+static void workspace_metadata_destroy(struct wl_resource *resource) {
+    metadata_manager_t *mgr = wl_resource_get_user_data(resource);
+
+    if (!mgr)
+        return;
+    wl_list_remove(&mgr->link);
+    pool_release(&metadata_manager_pool, mgr);
+}
+
+/* Publish all ephemeral workspace metadata to a newly connected client. */
+static void workspace_metadata_bind(
+    struct wl_client *client, void *data, uint32_t version, uint32_t id
+) {
+    metadata_manager_t *mgr = pool_take(&metadata_manager_pool);
+
+    if (!mgr) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    mgr->resource =
+        wl_resource_create(client, &swm_workspace_manager_v1_interface, (int)version, id);
+
+    if (!mgr->resource) {
+        pool_release(&metadata_manager_pool, mgr);
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(
+        mgr->resource, &workspace_metadata_impl, mgr, workspace_metadata_destroy
+    );
+    wl_list_insert(&metadata_managers, &mgr->link);
+    workspace_metadata_snapshot(mgr->resource);
+}
+
 /*
  * ext-workspace-v1 implementation. wlroots 0.19 ships no helper for this
  * protocol, so the resources are managed by hand. swm advertises a single
@@ -5291,15 +5452,15 @@ void workspace_broadcast(void) {
     uint32_t             state;
     int                  i;
 
-    if (wl_list_empty(&ws_managers))
-        return;
-
-    for (i = 0; i < WSCOUNT; i++) {
-        state = workspace_state(&workspaces[i]);
-        wl_list_for_each(h, &workspaces[i].handles, link)
-            ext_workspace_handle_v1_send_state(h->resource, state);
+    if (!wl_list_empty(&ws_managers)) {
+        for (i = 0; i < WSCOUNT; i++) {
+            state = workspace_state(&workspaces[i]);
+            wl_list_for_each(h, &workspaces[i].handles, link)
+                ext_workspace_handle_v1_send_state(h->resource, state);
+        }
+        wl_list_for_each(mgr, &ws_managers, link) ext_workspace_manager_v1_send_done(mgr->resource);
     }
-    wl_list_for_each(mgr, &ws_managers, link) ext_workspace_manager_v1_send_done(mgr->resource);
+    workspace_metadata_broadcast();
 }
 
 /* Accept an application's request to replace the primary selection. */
@@ -5430,11 +5591,13 @@ void setup(void) {
         wl_list_init(&workspaces[i].handles);
     }
     wl_list_init(&ws_managers);
+    wl_list_init(&metadata_managers);
     wl_list_init(&pending_spawns);
     wl_list_init(&window_states);
     wl_list_init(&input_popups);
     load_window_states();
     wl_global_create(dpy, &ext_workspace_manager_v1_interface, 1, nullptr, workspace_manager_bind);
+    wl_global_create(dpy, &swm_workspace_manager_v1_interface, 1, nullptr, workspace_metadata_bind);
 
     /* Publish window lists for taskbars and switchers. */
     ftl_mgr      = wlr_foreign_toplevel_manager_v1_create(dpy);

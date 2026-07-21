@@ -1,5 +1,7 @@
 swm
 swm.1
+swmctl
+swmctl.1
 config.h
 *.zst
 *.o
