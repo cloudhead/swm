@@ -130,8 +130,9 @@ install: swm swmctl swm.1 swmctl.1
 	install -Dm755 swmctl $(DESTDIR)$(PREFIX)/bin/swmctl
 	install -Dm644 swm.1 $(DESTDIR)$(MANDIR)/man1/swm.1
 	install -Dm644 swmctl.1 $(DESTDIR)$(MANDIR)/man1/swmctl.1
-	install -Dm644 swm.desktop \
-		$(DESTDIR)$(DATADIR)/wayland-sessions/swm.desktop
+	@test -e $(DESTDIR)$(DATADIR)/wayland-sessions/swm.desktop || \
+		install -Dm644 swm.desktop \
+			$(DESTDIR)$(DATADIR)/wayland-sessions/swm.desktop
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/swm

@@ -8,6 +8,7 @@ arch=('x86_64')
 url='https://github.com/cloudhead/swm'
 license=('GPL-3.0-only')
 options=('!debug')
+backup=('usr/share/wayland-sessions/swm.desktop')
 depends=(
   'glibc'
   'libinput'
