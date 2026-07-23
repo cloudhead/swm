@@ -203,10 +203,11 @@ def xdg_client(arguments: list[str]) -> None:
 
 
 def xdg_lifecycle(arguments: list[str]) -> None:
-    """Repeatedly map and unmap one XDG toplevel."""
+    """Repeatedly map and unmap a focused XDG toplevel."""
 
     count = int(arguments[0]) if arguments else 8
     connection = Connection(WlCompositor, WlShm, XdgWmBase)
+    fallback = Window(connection, "swm-xdg-fallback", 0xFF446622)
     window = Window(connection, "swm-xdg-lifecycle", 0xFF224466)
     connection.roundtrips(3)
     for index in range(count):
@@ -216,6 +217,7 @@ def xdg_lifecycle(arguments: list[str]) -> None:
         window.surface.commit()
         connection.roundtrips(2)
     window.destroy()
+    fallback.destroy()
     connection.close()
 
 

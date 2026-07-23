@@ -209,9 +209,11 @@ static void test_workspace_queries(void) {
 
 /* Verify state-file paths and client border-width policy. */
 static void test_paths_and_border_policy(void) {
-    const char *directory = getenv("SWM_TEST_DIR");
-    client_t    client    = {};
-    char        path[PATH_MAX], expected[PATH_MAX];
+    const char                 *directory = getenv("SWM_TEST_DIR");
+    client_t                    client    = {};
+    struct wlr_scene_tree       scene     = {};
+    struct wlr_xwayland_surface xsurface  = { .override_redirect = true };
+    char                        path[PATH_MAX], expected[PATH_MAX];
 
     assert(directory);
     assert(snprintf(path, sizeof(path), "%s/state", directory) < (int)sizeof(path));
@@ -226,6 +228,12 @@ static void test_paths_and_border_policy(void) {
         (int)sizeof(expected)
     );
     assert(!strcmp(window_state_path(), expected));
+    client_set_border_color(&client, bordercolor);
+    client.type             = X11;
+    client.surface.xwayland = &xsurface;
+    client.scene            = &scene;
+    client_set_border_color(&client, bordercolor);
+    client    = (client_t){};
     client.bw = 9;
     assert(client_border_width(&client) == borderwidth);
     client.is_fullscreen = 1;

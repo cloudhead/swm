@@ -1164,9 +1164,12 @@ static inline void client_send_close(client_t *c) {
     wlr_xdg_toplevel_send_close(c->surface.xdg->toplevel);
 }
 
-/* Set the color of every client border. */
+/* Set the color of every managed client border while its scene exists. */
 static inline void client_set_border_color(client_t *c, const float color[static 4]) {
     int i;
+
+    if (!c->scene || client_is_unmanaged(c))
+        return;
 
     for (i = 0; i < 4; i++)
         wlr_scene_rect_set_color(c->border[i], color);
@@ -2956,7 +2959,9 @@ void focus_client(client_t *c, int lift) {
             return;
             /* Don't deactivate old client if the new one wants focus, as this
              * avoids breaking applications such as winecfg. */
-        } else if (old_c && !client_is_unmanaged(old_c) && (!c || !client_wants_focus(c))) {
+        } else if (
+            old_c && old_c->scene && !client_is_unmanaged(old_c) && (!c || !client_wants_focus(c))
+        ) {
             client_set_border_color(old_c, bordercolor);
             client_activate_surface(old, 0);
         }
@@ -5977,6 +5982,7 @@ void unmap_notify(struct wl_listener *listener, void *data) {
     client_t  *c    = wl_container_of(listener, c, unmap);
     client_t  *next = nullptr, *under = nullptr;
     monitor_t *oldmon     = c->mon;
+    bool       hadfocus   = client_surface(c) == seat->keyboard_state.focused_surface;
     int        wasfocused = !client_is_unmanaged(c) && c == focus_top(c->mon);
 
     if (c == grabc) {
@@ -6002,7 +6008,7 @@ void unmap_notify(struct wl_listener *listener, void *data) {
         wl_list_remove(&c->flink);
         c->mon = nullptr;
 
-        if (wasfocused && !sloppyfocus)
+        if (hadfocus && !sloppyfocus)
             focus_client(next ? next : focus_top(selmon), 1);
 
         if (oldmon)
@@ -6026,7 +6032,7 @@ void unmap_notify(struct wl_listener *listener, void *data) {
      * focus_client() has finished deactivating the old surface. */
     wlr_scene_node_set_enabled(&c->scene->node, 0);
 
-    if (wasfocused && sloppyfocus) {
+    if (hadfocus && sloppyfocus) {
         /* Hit-test after hiding the old scene node so focus follows the
          * surface newly exposed beneath the stationary cursor. */
         point_to_node(cursor->x, cursor->y, nullptr, &under, nullptr, nullptr, nullptr);
