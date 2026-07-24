@@ -103,6 +103,12 @@ static void test_state(void) {
     assert(swm_workspace_next(0, 5, 1, true, visible, occupied) == 1);
     assert(swm_stack_configure(&state, SWM_MASTER_SHRINK, SWM_MASTER_LEFT, &side));
     assert(state.msize == 15 && side == SWM_MASTER_LEFT);
+    assert(tiled_resize_value(500, 1000, false) == 16);
+    assert(tiled_resize_value(250, 1000, false) == 8);
+    assert(tiled_resize_value(250, 1000, true) == 24);
+    assert(tiled_resize_value(-100, 1000, false) == 1);
+    assert(tiled_resize_value(1100, 1000, false) == 31);
+    assert(tiled_resize_value(10, 16, false) == -1);
 
     for (int command = SWM_MASTER_GROW; command <= SWM_FLIP_LAYOUT; command++)
         assert(swm_stack_configure(&state, command, SWM_MASTER_LEFT, &side));

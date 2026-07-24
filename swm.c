@@ -121,7 +121,7 @@
 #define LISTEN_STATIC(E, H)     listen_static((E), (H))
 
 /* Cursor interaction state. */
-enum { CURSOR_NORMAL, CURSOR_PRESSED, CURSOR_MOVE, CURSOR_RESIZE };
+enum { CURSOR_NORMAL, CURSOR_PRESSED, CURSOR_MOVE, CURSOR_RESIZE, CURSOR_TILE_RESIZE };
 
 /* Master-stack configuration commands. */
 enum {
@@ -439,6 +439,10 @@ static void              arrange_layers(monitor_t *m);
 static void              autostart_exec(void);
 static void              axis_notify(struct wl_listener *listener, void *data);
 static void              button_press(struct wl_listener *listener, void *data);
+static bool              tiled_resize_boundary(monitor_t *m, int x, int y, bool *horizontal);
+static void              tiled_resize_cursor(bool active, bool horizontal);
+static int               tiled_resize_value(int offset, int size, bool flip);
+static void              tiled_resize_update(void);
 static void              change_vt(const arg_t *arg);
 static void              check_idle_inhibitor(struct wlr_surface *exclude);
 static void              cleanup(void);
@@ -705,6 +709,10 @@ static int               grabcx, grabcy; /* Pointer position within the grabbed 
 static int               grabx, graby;   /* Pointer position within the display layout. */
 static uint32_t          grabedges;
 static struct wlr_box    grabgeom;
+static workspace_t      *grabws;             /* Workspace changed by a tiled resize. */
+static bool              grab_horizontal;    /* Tiled resize changes a horizontal boundary. */
+static bool              tiled_resize_hover; /* Pointer uses a tiled resize cursor. */
+static bool              tiled_resize_hover_horizontal; /* Hovered boundary orientation. */
 
 static struct wlr_output_layout *output_layout;
 static struct wlr_box            sgeom;
@@ -1655,6 +1663,62 @@ size_t swm_stack_layout(
     return count;
 }
 
+/* Return the active master boundary for a tiled workspace. */
+static bool tiled_resize_boundary(monitor_t *m, int x, int y, bool *horizontal) {
+    client_t      *c;
+    workspace_t   *ws;
+    stack_state_t *st;
+    int            boundary, count = 0, masters;
+    bool           rotate, flip;
+
+    if (!m || !(ws = m->ws) || !ws->lt || !ws->lt->arrange || ws->lt->arrange == max_stack ||
+        x < m->w.x || x >= m->w.x + m->w.width || y < m->w.y || y >= m->w.y + m->w.height)
+        return false;
+
+    rotate = ws->lt->arrange == master_top || ws->lt->arrange == master_bottom;
+    flip   = ws->lt->arrange == master_right || ws->lt->arrange == master_bottom;
+
+    if (!rotate && ws->lt->arrange != master_left && ws->lt->arrange != master_right)
+        return false;
+
+    wl_list_for_each(c, &clients, link) if (VISIBLEON(c, m) && !c->is_floating && !c->is_fullscreen)
+        count++;
+
+    st      = rotate ? &ws->h : &ws->v;
+    masters = MIN(MAX(st->mwin, 0), count);
+
+    if (!masters || masters == count)
+        return false;
+
+    if (rotate) {
+        boundary = flip ? m->w.y + m->w.height - m->w.height / SLICE * st->msize
+                        : m->w.y + m->w.height / SLICE * st->msize;
+        if ((unsigned int)abs(y - boundary) > tiled_resize_margin)
+            return false;
+    } else {
+        boundary = flip ? m->w.x + m->w.width - m->w.width / SLICE * st->msize
+                        : m->w.x + m->w.width / SLICE * st->msize;
+        if ((unsigned int)abs(x - boundary) > tiled_resize_margin)
+            return false;
+    }
+    *horizontal = rotate;
+    return true;
+}
+
+/* Convert a pointer offset to a tiled master size. */
+static int tiled_resize_value(int offset, int size, bool flip) {
+    int step, value;
+
+    if (size < SLICE || (step = size / SLICE) == 0)
+        return -1;
+
+    value = (offset + step / 2) / step;
+
+    if (flip)
+        value = SLICE - value;
+    return MIN(MAX(value, 1), SLICE - 1);
+}
+
 /* Function implementations. */
 /* Clamp client geometry to the supplied bounds. */
 void apply_bounds(client_t *c, struct wlr_box *bbox) {
@@ -1922,6 +1986,17 @@ void button_press(struct wl_listener *listener, void *data) {
         keyboard = wlr_seat_get_keyboard(seat);
         mods     = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
 
+        if (event->button == BTN_LEFT && CLEANMASK(mods) == CLEANMASK(MOD) &&
+            tiled_resize_boundary(
+                selmon, (int)round(cursor->x), (int)round(cursor->y), &grab_horizontal
+            )) {
+            grabws      = selmon->ws;
+            cursor_mode = CURSOR_TILE_RESIZE;
+            tiled_resize_cursor(true, grab_horizontal);
+            return;
+        }
+        tiled_resize_cursor(false, false);
+
         for (b = buttons; b < END(buttons); b++) {
             if (CLEANMASK(mods) == CLEANMASK(b->mod) && event->button == b->button && b->func) {
                 b->func(&b->arg);
@@ -1933,6 +2008,12 @@ void button_press(struct wl_listener *listener, void *data) {
         /* Releasing any button ends an interactive move or resize. */
         /* TODO: Restore the cursor requested by the window under the pointer. */
         if (!locked && cursor_mode != CURSOR_NORMAL && cursor_mode != CURSOR_PRESSED) {
+            if (cursor_mode == CURSOR_TILE_RESIZE) {
+                cursor_mode = CURSOR_NORMAL;
+                grabws      = nullptr;
+                tiled_resize_update();
+                return;
+            }
             if (cursor_mode == CURSOR_RESIZE)
                 client_set_resizing(grabc, 0);
             wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
@@ -1947,6 +2028,7 @@ void button_press(struct wl_listener *listener, void *data) {
             return;
         }
         cursor_mode = CURSOR_NORMAL;
+        tiled_resize_update();
         break;
     }
     /* Forward buttons that were not handled here to the application under the pointer. */
@@ -3683,6 +3765,7 @@ void key_press_modifiers(struct wl_listener *listener, void *data) {
     wlr_seat_set_keyboard(seat, &group->wlr_group->keyboard);
     /* Forward the new modifier state to the focused application. */
     wlr_seat_keyboard_notify_modifiers(seat, &group->wlr_group->keyboard.modifiers);
+    tiled_resize_update();
 }
 
 /* Repeat the active shortcut at the keyboard's configured rate. */
@@ -4113,7 +4196,8 @@ void motion_notify(
         if (constraint && constraint->surface != seat->pointer_state.focused_surface)
             constraint = nullptr;
 
-        if (constraint && cursor_mode != CURSOR_RESIZE && cursor_mode != CURSOR_MOVE) {
+        if (constraint && cursor_mode != CURSOR_RESIZE && cursor_mode != CURSOR_MOVE &&
+            cursor_mode != CURSOR_TILE_RESIZE) {
             toplevel_from_wlr_surface(constraint->surface, &c, nullptr);
 
             if (c) {
@@ -4174,9 +4258,13 @@ void motion_notify(
         grabc->resize_edges = grabedges;
         resize(grabc, geo, 1);
         return;
+    } else if (cursor_mode == CURSOR_TILE_RESIZE) {
+        tiled_resize_update();
+        return;
     }
+    tiled_resize_update();
     /* Show the default cursor over the background and window borders. */
-    if (!surface && !seat->drag)
+    if (!surface && !seat->drag && !tiled_resize_hover)
         wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
 
     pointer_focus(c, surface, sx, sy, time, refocus);
@@ -4198,6 +4286,60 @@ void motion_relative(struct wl_listener *listener, void *data) {
         event->unaccel_dy,
         1
     );
+}
+
+/* Set or clear the cursor for a tiled master boundary. */
+static void tiled_resize_cursor(bool active, bool horizontal) {
+    if (active) {
+        if (!tiled_resize_hover || tiled_resize_hover_horizontal != horizontal)
+            wlr_cursor_set_xcursor(cursor, cursor_mgr, horizontal ? "ns-resize" : "ew-resize");
+        tiled_resize_hover_horizontal = horizontal;
+    } else if (tiled_resize_hover) {
+        wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
+    }
+    tiled_resize_hover = active;
+}
+
+/* Update the tiled master size or its hover cursor. */
+static void tiled_resize_update(void) {
+    monitor_t           *m = point_to_monitor(cursor->x, cursor->y);
+    struct wlr_keyboard *keyboard;
+    workspace_t         *ws;
+    stack_state_t       *st;
+    int                  size, offset, value;
+    bool                 horizontal, flip;
+
+    if (cursor_mode != CURSOR_TILE_RESIZE) {
+        if (cursor_mode == CURSOR_PRESSED)
+            return;
+        keyboard = wlr_seat_get_keyboard(seat);
+        if (!keyboard || CLEANMASK(wlr_keyboard_get_modifiers(keyboard)) != CLEANMASK(MOD)) {
+            tiled_resize_cursor(false, false);
+            return;
+        }
+        if (tiled_resize_boundary(m, (int)round(cursor->x), (int)round(cursor->y), &horizontal))
+            tiled_resize_cursor(true, horizontal);
+        else
+            tiled_resize_cursor(false, false);
+        return;
+    }
+
+    if (!grabws || !grabws->mon)
+        return;
+
+    ws   = grabws;
+    m    = ws->mon;
+    st   = grab_horizontal ? &ws->h : &ws->v;
+    flip = ws->lt->arrange == master_right || ws->lt->arrange == master_bottom;
+    size = grab_horizontal ? m->w.height : m->w.width;
+
+    offset = grab_horizontal ? (int)round(cursor->y) - m->w.y : (int)round(cursor->x) - m->w.x;
+    value  = tiled_resize_value(offset, size, flip);
+
+    if (value >= 0 && st->msize != value) {
+        st->msize = value;
+        arrange(m);
+    }
 }
 
 /* Forward touchpad swipe gestures to clients of the focused surface. */
@@ -4783,7 +4925,7 @@ void set_cursor(struct wl_listener *listener, void *data) {
 
     /* Keep the move or resize cursor until the pointer grab ends. The
      * application will request its cursor again when the pointer re-enters. */
-    if (cursor_mode != CURSOR_NORMAL && cursor_mode != CURSOR_PRESSED)
+    if ((cursor_mode != CURSOR_NORMAL && cursor_mode != CURSOR_PRESSED) || tiled_resize_hover)
         return;
     /* This can be sent by any client, so we check to make sure this one
      * actually has pointer focus first. If so, we can tell the cursor to
@@ -4798,7 +4940,7 @@ void set_cursor(struct wl_listener *listener, void *data) {
 void set_cursor_shape(struct wl_listener *listener, void *data) {
     struct wlr_cursor_shape_manager_v1_request_set_shape_event *event = data;
 
-    if (cursor_mode != CURSOR_NORMAL && cursor_mode != CURSOR_PRESSED)
+    if ((cursor_mode != CURSOR_NORMAL && cursor_mode != CURSOR_PRESSED) || tiled_resize_hover)
         return;
     /* This can be sent by any client, so we check to make sure this one
      * actually has pointer focus first. If so, we can tell the cursor to

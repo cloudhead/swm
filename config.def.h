@@ -93,6 +93,8 @@ static const int repeat_rate  = 40;
 static const int repeat_delay = 180;
 
 /* Pointer and touchpad behavior. Unsupported options are ignored per device. */
+/* Resize a tiled split within this distance from its boundary, in pixels. */
+static const unsigned tiled_resize_margin = 4;
 /* Tap the touchpad to produce a click. */
 static const bool tap_to_click            = true;
 /* Keep a tapped item grabbed while the finger moves. */
