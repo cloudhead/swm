@@ -529,9 +529,9 @@ static void test_client_accessors(void) {
     const char *const command[] = { "before-$SWM_TEST_EXPAND", "$SWM_TEST_MISSING", nullptr };
 
     init_xdg_client(&client, &xdg, &toplevel, "xdg-app", "XDG title");
-    xdg.geometry = (struct wlr_box){ 3, 4, 50, 60 };
-    client.geom  = (struct wlr_box){ 1, 2, 70, 80 };
-    client.bw    = 2;
+    xdg.geometry         = (struct wlr_box){ 3, 4, 50, 60 };
+    client.geom          = (struct wlr_box){ 1, 2, 70, 80 };
+    client.bw            = 2;
     client.is_fullscreen = true;
     assert(!client_allows_move_resize(&client, CURSOR_MOVE));
     assert(client_allows_move_resize(&client, CURSOR_RESIZE));

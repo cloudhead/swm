@@ -39,7 +39,10 @@ from protocols.wayland import (
 from protocols.wlr_foreign_toplevel_management_unstable_v1 import (
     ZwlrForeignToplevelManagerV1,
 )
-from protocols.wlr_layer_shell_unstable_v1 import ZwlrLayerShellV1
+from protocols.wlr_layer_shell_unstable_v1 import (
+    ZwlrLayerShellV1,
+    ZwlrLayerSurfaceV1,
+)
 from protocols.wlr_output_power_management_unstable_v1 import (
     ZwlrOutputPowerManagerV1,
 )
@@ -60,12 +63,14 @@ class Connection:
         self.registry = self.display.get_registry()
         self.interfaces = {interface.name: interface for interface in interfaces}
         self.globals: dict[str, object] = {}
+        self._versions: dict[str, int] = {}
         self.registry.dispatcher["global"] = self._global
         self.display.roundtrip()
 
     def _global(self, registry, name: int, interface: str, version: int) -> None:
         wanted = self.interfaces.get(interface)
         if wanted is not None and interface not in self.globals:
+            self._versions[interface] = version
             self.globals[interface] = registry.bind(name, wanted, min(version, wanted.version))
 
     def get(self, interface):
@@ -75,6 +80,16 @@ class Connection:
             return self.globals[interface.name]
         except KeyError as error:
             raise Failure(f"compositor does not advertise {interface.name}") from error
+
+    def require_version(self, interface, version: int) -> None:
+        """Require a minimum advertised version for one global."""
+
+        advertised = self._versions.get(interface.name, 0)
+        if advertised < version:
+            raise Failure(
+                f"compositor advertises {interface.name} version {advertised}, "
+                f"but version {version} is required"
+            )
 
     def roundtrips(self, count: int = 1) -> None:
         """Complete several request/event exchanges."""
@@ -514,10 +529,38 @@ def layer(arguments: list[str]) -> None:
     """Create, configure, map, and destroy layer-shell surfaces."""
 
     count = int(arguments[0]) if arguments else 2
-    connection = Connection(WlCompositor, WlShm, ZwlrLayerShellV1)
+    connection = Connection(
+        WlCompositor,
+        WlSeat,
+        WlShm,
+        ZwpVirtualKeyboardManagerV1,
+        ZwlrLayerShellV1,
+        ZwlrVirtualPointerManagerV1,
+    )
     compositor = connection.get(WlCompositor)
+    seat = connection.get(WlSeat)
     shm = connection.get(WlShm)
     shell = connection.get(ZwlrLayerShellV1)
+    connection.require_version(ZwlrLayerShellV1, 4)
+    virtual_keyboard = connection.get(ZwpVirtualKeyboardManagerV1).create_virtual_keyboard(
+        seat
+    )
+    keymap, _ = keymap_text()
+    keymap_stream = tempfile.TemporaryFile(dir=os.environ.get("SWM_TEST_DIR"))
+    keymap_stream.write(keymap + b"\0")
+    keymap_stream.flush()
+    virtual_keyboard.keymap(
+        WlKeyboard.keymap_format.xkb_v1,
+        keymap_stream.fileno(),
+        len(keymap) + 1,
+    )
+    connection.roundtrips()
+    keyboard = seat.get_keyboard()
+    keyboard_enters = []
+    keyboard.dispatcher["enter"] = lambda proxy, serial, surface, keys: (
+        keyboard_enters.append(surface)
+    )
+    keyboard.dispatcher["leave"] = lambda proxy, serial, surface: None
     layers = []
     for index in range(count):
         surface = compositor.create_surface()
@@ -526,6 +569,17 @@ def layer(arguments: list[str]) -> None:
             None,
             ZwlrLayerShellV1.layer.top,
             f"swm-layer-{index}",
+        )
+        role.set_keyboard_interactivity(
+            ZwlrLayerSurfaceV1.keyboard_interactivity.on_demand
+        )
+        role.set_anchor(
+            ZwlrLayerSurfaceV1.anchor.top
+            | (
+                ZwlrLayerSurfaceV1.anchor.left
+                if index == 0
+                else ZwlrLayerSurfaceV1.anchor.right
+            )
         )
         configured = []
 
@@ -549,12 +603,28 @@ def layer(arguments: list[str]) -> None:
         role.dispatcher["configure"] = configure
         role.dispatcher["closed"] = lambda proxy: None
         role.set_size(80 + index, 40 + index)
-        role.set_anchor(1 << (index % 4))
         surface.commit()
         layers.append((surface, role, configured))
     connection.roundtrips(3)
     if not all(configured for _, _, configured in layers):
         raise Failure("layer surface was not configured")
+    if keyboard_enters:
+        raise Failure("on-demand layer surface received keyboard focus when mapped")
+
+    pointer = connection.get(ZwlrVirtualPointerManagerV1).create_virtual_pointer(seat)
+    pointer.motion_absolute(0, 20, 20, 1000, 1000)
+    pointer.frame()
+    pointer.button(1, 0x110, 1)
+    pointer.frame()
+    pointer.button(2, 0x110, 0)
+    pointer.frame()
+    connection.roundtrips(2)
+    if not keyboard_enters:
+        raise Failure("on-demand layer surface did not receive keyboard focus when pressed")
+    pointer.destroy()
+    keyboard.release()
+    virtual_keyboard.destroy()
+    keymap_stream.close()
     for surface, role, _ in reversed(layers):
         role.destroy()
         surface.destroy()

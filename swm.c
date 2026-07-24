@@ -1807,7 +1807,10 @@ void arrange_layers(monitor_t *m) {
     /* Give keyboard focus to the highest layer that requests it. */
     for (i = 0; i < (int)LENGTH(layers_above_shell); i++) {
         wl_list_for_each_reverse(l, &m->layers[layers_above_shell[i]], link) {
-            if (locked || !l->layer_surface->current.keyboard_interactive || !l->mapped)
+            if (locked ||
+                l->layer_surface->current.keyboard_interactive !=
+                    ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE ||
+                !l->mapped)
                 continue;
             /* Deactivate the focused client. */
             focus_client(nullptr, 0);
@@ -1890,6 +1893,7 @@ void button_press(struct wl_listener *listener, void *data) {
     struct wlr_keyboard             *keyboard;
     uint32_t                         mods;
     client_t                        *c;
+    layer_surface_t                 *l;
     const button_t                  *b;
 
     wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
@@ -1903,10 +1907,17 @@ void button_press(struct wl_listener *listener, void *data) {
             break;
 
         /* Focus a window when a button is pressed over it. */
-        point_to_node(cursor->x, cursor->y, nullptr, &c, nullptr, nullptr, nullptr);
+        point_to_node(cursor->x, cursor->y, nullptr, &c, &l, nullptr, nullptr);
 
         if (c && (!client_is_unmanaged(c) || client_wants_focus(c)))
             focus_client(c, 1);
+        else if (
+            l && l->layer_surface->current.keyboard_interactive ==
+                     ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND
+        ) {
+            focus_client(nullptr, 0);
+            client_notify_enter(l->layer_surface->surface, wlr_seat_get_keyboard(seat));
+        }
 
         keyboard = wlr_seat_get_keyboard(seat);
         mods     = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
@@ -2956,7 +2967,7 @@ void focus_client(client_t *c, int lift) {
         /* If an overlay is focused, don't focus or activate the client,
          * but only update its position in fstack to render its border with
          * focuscolor and focus it after the overlay is closed. */
-        if (old_client_type == LAYER_SHELL &&
+        if (old_client_type == LAYER_SHELL && old_l == exclusive_focus &&
             wlr_scene_node_coords(&old_l->scene->node, &unused_lx, &unused_ly) &&
             old_l->layer_surface->current.layer >= ZWLR_LAYER_SHELL_V1_LAYER_TOP) {
             return;
@@ -5638,7 +5649,7 @@ void setup(void) {
     xdg_dialog_mgr = wlr_xdg_wm_dialog_v1_create(dpy, 1);
     wl_signal_add(&xdg_dialog_mgr->events.new_dialog, &new_xdg_dialog);
 
-    layer_shell = wlr_layer_shell_v1_create(dpy, 3);
+    layer_shell = wlr_layer_shell_v1_create(dpy, 4);
     wl_signal_add(&layer_shell->events.new_surface, &new_layer_surface);
 
     idle_notifier = wlr_idle_notifier_v1_create(dpy);
