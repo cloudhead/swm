@@ -104,6 +104,7 @@
 #define MAX_POINTER_CONSTRAINTS 256
 #define MAX_TEXT_INPUTS         128
 #define MAX_INPUT_POPUPS        64
+#define MAX_POPUPS              256
 #define MAX_SESSION_LOCKS       4
 #define MAX_PENDING_SPAWNS      256
 #define MAX_WINDOW_STATES       512
@@ -378,6 +379,13 @@ typedef struct {
     struct wl_listener        destroy;
 } text_input_t;
 
+/* XDG popup state. */
+typedef struct {
+    struct wlr_xdg_popup *popup;
+    struct wl_listener    commit;
+    struct wl_listener    destroy;
+} popup_t;
+
 /* Input-method popup state. */
 typedef struct {
     struct wlr_input_popup_surface_v2 *popup;
@@ -452,6 +460,7 @@ static void              close_monitor(monitor_t *m);
 static void              layer_surface_commit_notify(struct wl_listener *listener, void *data);
 static void              commit_notify(struct wl_listener *listener, void *data);
 static void              popup_commit(struct wl_listener *listener, void *data);
+static void              popup_destroy(struct wl_listener *listener, void *data);
 static void              create_decoration(struct wl_listener *listener, void *data);
 static void              create_idle_inhibitor(struct wl_listener *listener, void *data);
 static void              create_keyboard(struct wlr_keyboard *keyboard);
@@ -827,6 +836,7 @@ static keyboard_group_t     keyboard_group_items[MAX_KEYBOARD_GROUPS];
 static pointer_constraint_t pointer_constraint_items[MAX_POINTER_CONSTRAINTS];
 static text_input_t         text_input_items[MAX_TEXT_INPUTS];
 static input_popup_t        input_popup_items[MAX_INPUT_POPUPS];
+static popup_t              popup_items[MAX_POPUPS];
 static session_lock_t       session_lock_items[MAX_SESSION_LOCKS];
 static pending_spawn_t      pending_spawn_items[MAX_PENDING_SPAWNS];
 static window_state_t       window_state_items[MAX_WINDOW_STATES];
@@ -839,6 +849,7 @@ static bool client_used[MAX_CLIENTS], monitor_used[MAX_MONITORS];
 static bool layer_surface_used[MAX_LAYER_SURFACES], keyboard_group_used[MAX_KEYBOARD_GROUPS];
 static bool pointer_constraint_used[MAX_POINTER_CONSTRAINTS], text_input_used[MAX_TEXT_INPUTS];
 static bool input_popup_used[MAX_INPUT_POPUPS], session_lock_used[MAX_SESSION_LOCKS];
+static bool popup_used[MAX_POPUPS];
 static bool pending_spawn_used[MAX_PENDING_SPAWNS], window_state_used[MAX_WINDOW_STATES];
 static bool static_listener_used[MAX_STATIC_LISTENERS], workspace_manager_used[MAX_WS_MANAGERS];
 static bool workspace_handle_used[MAX_WS_HANDLES], metadata_manager_used[MAX_WS_MANAGERS];
@@ -909,6 +920,9 @@ static pool_t metadata_manager_pool   = { metadata_manager_items,
                                           LENGTH(metadata_manager_items),
                                           sizeof *metadata_manager_items,
                                           "metadata_manager" };
+static pool_t popup_pool              = {
+    popup_items, popup_used, LENGTH(popup_items), sizeof *popup_items, "popup"
+};
 
 /* Backend-specific client operations. */
 /* Client helpers shared by the XDG shell and Xwayland implementations. These
@@ -2323,42 +2337,44 @@ void commit_notify(struct wl_listener *listener, void *data) {
 
 /* Create and constrain a popup after its initial state is committed. */
 void popup_commit(struct wl_listener *listener, void *data) {
-    struct wlr_surface   *surface = data;
-    struct wlr_xdg_popup *popup   = wlr_xdg_popup_try_from_wlr_surface(surface);
-    layer_surface_t      *l       = nullptr;
-    client_t             *c       = nullptr;
+    popup_t              *p     = wl_container_of(listener, p, commit);
+    struct wlr_xdg_popup *popup = p->popup;
+    layer_surface_t      *l     = nullptr;
+    client_t             *c     = nullptr;
     struct wlr_box        box;
     int                   type = -1;
 
-    if (!popup) {
-        wl_list_remove(&listener->link);
-        listener_release(listener);
-        return;
-    }
     if (!popup->base->initial_commit)
         return;
 
     type = toplevel_from_wlr_surface(popup->base->surface, &c, &l);
 
     if ((type == LAYER_SHELL && (!l || !l->mon)) || (type != LAYER_SHELL && (!c || !c->mon)) ||
-        !popup->parent || !popup->parent->data)
-        goto destroy_popup;
+        !popup->parent || !popup->parent->data) {
+        wlr_xdg_popup_destroy(popup);
+        return;
+    }
     popup->base->surface->data = wlr_scene_xdg_surface_create(popup->parent->data, popup->base);
 
-    if (!popup->base->surface->data)
-        goto destroy_popup;
+    if (!popup->base->surface->data) {
+        wlr_xdg_popup_destroy(popup);
+        return;
+    }
     box    = type == LAYER_SHELL ? l->mon->m : c->mon->w;
     box.x -= (type == LAYER_SHELL ? l->scene->node.x : c->geom.x);
     box.y -= (type == LAYER_SHELL ? l->scene->node.y : c->geom.y);
     wlr_xdg_popup_unconstrain_from_box(popup, &box);
-    wl_list_remove(&listener->link);
-    listener_release(listener);
-    return;
+}
 
-destroy_popup:
-    wl_list_remove(&listener->link);
-    listener_release(listener);
-    wlr_xdg_popup_destroy(popup);
+/* Unpublish a destroyed popup's scene tree and release its state. */
+void popup_destroy(struct wl_listener *listener, void *data) {
+    popup_t *p = wl_container_of(listener, p, destroy);
+
+    /* The scene tree dies with the popup, but its wl_surface can outlive both. */
+    p->popup->base->surface->data = nullptr;
+    wl_list_remove(&p->commit.link);
+    wl_list_remove(&p->destroy.link);
+    pool_release(&popup_pool, p);
 }
 
 /* Attach an event listener from the fixed-capacity listener pool. */
@@ -2760,8 +2776,14 @@ void create_popup(struct wl_listener *listener, void *data) {
     /* This event is raised when a client (either xdg-shell or layer-shell)
      * creates a new popup. */
     struct wlr_xdg_popup *popup = data;
+    popup_t              *p     = pool_take(&popup_pool);
 
-    LISTEN_STATIC(&popup->base->surface->events.commit, popup_commit);
+    if (!p)
+        return;
+    p->popup = popup;
+
+    LISTEN(&popup->base->surface->events.commit, &p->commit, popup_commit);
+    LISTEN(&popup->events.destroy, &p->destroy, popup_destroy);
 }
 
 /* Activate the pointer constraint belonging to the focused surface. */
@@ -2842,6 +2864,9 @@ void layer_surface_destroy_notify(struct wl_listener *listener, void *data) {
     wl_list_remove(&l->destroy.link);
     wl_list_remove(&l->unmap.link);
     wl_list_remove(&l->surface_commit.link);
+    /* A wl_surface outlives the role object built on it. Drop the scene tree
+     * published in its user data before destroying that tree. */
+    l->layer_surface->surface->data = nullptr;
     wlr_scene_node_destroy(&l->popups->node);
 
     if (l->dim)
@@ -2851,6 +2876,8 @@ void layer_surface_destroy_notify(struct wl_listener *listener, void *data) {
 
 /* Handle a session locker that exits without unlocking cleanly. */
 void destroy_lock(session_lock_t *lock, int unlock) {
+    monitor_t *m;
+
     wlr_seat_keyboard_notify_clear_focus(seat);
     input_method_set_focus(nullptr);
     locked = !unlock;
@@ -2864,6 +2891,13 @@ void destroy_lock(session_lock_t *lock, int unlock) {
     wl_list_remove(&lock->unlock.link);
     wl_list_remove(&lock->destroy.link);
 
+    /* Detach the lock surfaces still attached to a display, since the scene
+     * destroyed below owns their trees. Keyboard focus was cleared above, so
+     * this only unpublishes those trees and drops their destroy listeners. */
+    wl_list_for_each(m, &mons, link) {
+        if (m->lock_surface)
+            destroy_lock_surface(&m->destroy_lock_surface, nullptr);
+    }
     wlr_scene_node_destroy(&lock->scene->node);
     cur_lock = nullptr;
     pool_release(&session_lock_pool, lock);
@@ -2876,6 +2910,9 @@ void destroy_lock_surface(struct wl_listener *listener, void *data) {
 
     m->lock_surface = nullptr;
     wl_list_remove(&m->destroy_lock_surface.link);
+    /* The wl_surface can outlive the lock surface built on it, while its scene
+     * tree cannot. */
+    lock_surface->surface->data = nullptr;
 
     if (lock_surface->surface != seat->keyboard_state.focused_surface)
         return;
