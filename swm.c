@@ -3054,8 +3054,8 @@ void focus_client(client_t *c, int lift) {
     if (c && client_is_blocked(c))
         c = focus_top(c->mon);
 
-    /* Raise the window when requested. */
-    if (c && lift)
+    /* Raise the window when requested. An unmapped window has no scene. */
+    if (c && lift && c->scene)
         wlr_scene_node_raise_to_top(&c->scene->node);
 
     if (c && client_surface(c) == old)
@@ -6208,6 +6208,10 @@ void unmap_notify(struct wl_listener *listener, void *data) {
             next = focus_close(c);
         wl_list_remove(&c->link);
         wl_list_remove(&c->flink);
+        /* The window outlives this list membership, so leave both links in a
+         * state that a second removal cannot corrupt. */
+        wl_list_init(&c->link);
+        wl_list_init(&c->flink);
         c->mon = nullptr;
 
         if (hadfocus && !sloppyfocus)
