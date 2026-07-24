@@ -3083,8 +3083,12 @@ void focus_client(client_t *c, int lift) {
 /* Return the main client in a related client group. */
 client_t *client_main(client_t *c) {
     client_t *p;
+    int       steps = MAX_CLIENTS;
 
-    while (c && (p = client_get_parent(c)) && p != c)
+    /* Windows can form a parent cycle: X11 clients may point WM_TRANSIENT_FOR
+     * at each other, and nothing validates the chain. Take at most one step per
+     * window so a cycle stops the walk instead of hanging the compositor. */
+    while (c && steps-- > 0 && (p = client_get_parent(c)) && p != c)
         c = p;
     return c;
 }
