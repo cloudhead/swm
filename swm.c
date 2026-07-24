@@ -1144,6 +1144,11 @@ static inline bool client_is_unmanaged(client_t *c) {
     return false;
 }
 
+/* Return whether the client supports the requested pointer operation. */
+static inline bool client_allows_move_resize(client_t *c, uint32_t mode) {
+    return !client_is_unmanaged(c) && (!c->is_fullscreen || mode == CURSOR_RESIZE);
+}
+
 /* Send keyboard focus to a client surface. */
 static inline void client_notify_enter(struct wlr_surface *s, struct wlr_keyboard *kb) {
     if (kb)
@@ -4271,8 +4276,11 @@ void move_resize(const arg_t *arg) {
         return;
     point_to_node(cursor->x, cursor->y, nullptr, &grabc, nullptr, nullptr, nullptr);
 
-    if (!grabc || client_is_unmanaged(grabc) || grabc->is_fullscreen)
+    if (!grabc || !client_allows_move_resize(grabc, arg->u))
         return;
+
+    if (grabc->is_fullscreen)
+        set_fullscreen(grabc, 0);
 
     /* Float the window and let pointer motion move or resize it. */
     grabc->persist_float = 1;

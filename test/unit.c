@@ -532,6 +532,11 @@ static void test_client_accessors(void) {
     xdg.geometry = (struct wlr_box){ 3, 4, 50, 60 };
     client.geom  = (struct wlr_box){ 1, 2, 70, 80 };
     client.bw    = 2;
+    client.is_fullscreen = true;
+    assert(!client_allows_move_resize(&client, CURSOR_MOVE));
+    assert(client_allows_move_resize(&client, CURSOR_RESIZE));
+    client.is_fullscreen = false;
+    assert(client_allows_move_resize(&client, CURSOR_MOVE));
     assert(!strcmp(client_get_appid(&client), "xdg-app"));
     assert(!strcmp(client_get_title(&client), "XDG title"));
     client_get_clip(&client, &box);
